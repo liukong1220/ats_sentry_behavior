@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- P6 二：无裁判系统测试树同样只走
+     `ats_navigation_interfaces/action/NavigateToPose` on `/ats_navigate_to_pose`。
+     终端成功只认 `RESULT_SUCCEEDED`，不得用 `IsPathGoalReached` 的位置容差替代；
+     旧 Nav2 节点只保留在 `dev_rm.xml`、`rmul_2025.xml` 对照 profile。 -->
 <root BTCPP_format="4">
   <BehaviorTree ID="rmuc_2026_test_mapping_points">
     <KeepRunningUntilFailure>
@@ -13,16 +17,8 @@
           <LoadCsvWaypoints csv_file="{@decision_rmuc_csv_file}"
                             patrol_mode="false"
                             path="{decision_path}"/>
-          <Fallback>
-            <Sequence>
-              <IsPathGoalReached path="{decision_path}"
-                                 goal_succeeded="{decision_nav_goal_succeeded}"
-                                 current_pose="{@decision_current_pose}"/>
-            </Sequence>
-            <SendNavThroughPoses path="{decision_path}"
-                                 current_pose="{@decision_current_pose}"
-                                 goal_succeeded="{decision_nav_goal_succeeded}"/>
-          </Fallback>
+          <SendAtsNavGoal path="{decision_path}"
+                          goal_succeeded="{decision_nav_goal_succeeded}"/>
         </Sequence>
       </ForceSuccess>
     </KeepRunningUntilFailure>
@@ -39,16 +35,8 @@
                             duration="0.0"
                             topic_name="{@decision_spin_topic}"/>
           <SelectSupplyPoint path="{decision_path}"/>
-          <Fallback>
-            <Sequence>
-              <IsPathGoalReached path="{decision_path}"
-                                 goal_succeeded="{decision_nav_goal_succeeded}"
-                                 current_pose="{@decision_current_pose}"/>
-            </Sequence>
-            <SendNavThroughPoses path="{decision_path}"
-                                 current_pose="{@decision_current_pose}"
-                                 goal_succeeded="{decision_nav_goal_succeeded}"/>
-          </Fallback>
+          <SendAtsNavGoal path="{decision_path}"
+                          goal_succeeded="{decision_nav_goal_succeeded}"/>
         </Sequence>
       </ForceSuccess>
     </KeepRunningUntilFailure>
@@ -71,21 +59,14 @@
                             path="{decision_path}"
                             next_cursor="{decision_next_patrol_cursor}"
                             next_direction="{decision_next_patrol_direction}"/>
-          <Fallback>
-            <Sequence>
-              <IsPathGoalReached path="{decision_path}"
-                                 goal_succeeded="{decision_nav_goal_succeeded}"
-                                 current_pose="{@decision_current_pose}"/>
-              <AdvancePatrolCursor next_cursor="{decision_next_patrol_cursor}"
-                                   next_direction="{decision_next_patrol_direction}"
-                                   patrol_cursor="{decision_patrol_cursor}"
-                                   patrol_direction="{decision_patrol_direction}"
-                                   goal_succeeded="{decision_nav_goal_succeeded}"/>
-            </Sequence>
-            <SendNavThroughPoses path="{decision_path}"
-                                 current_pose="{@decision_current_pose}"
-                                 goal_succeeded="{decision_nav_goal_succeeded}"/>
-          </Fallback>
+          <!-- 巡逻游标推进只能由 ATS action 的终端成功驱动。 -->
+          <SendAtsNavGoal path="{decision_path}"
+                          goal_succeeded="{decision_nav_goal_succeeded}"/>
+          <AdvancePatrolCursor next_cursor="{decision_next_patrol_cursor}"
+                               next_direction="{decision_next_patrol_direction}"
+                               patrol_cursor="{decision_patrol_cursor}"
+                               patrol_direction="{decision_patrol_direction}"
+                               goal_succeeded="{decision_nav_goal_succeeded}"/>
         </Sequence>
       </ForceSuccess>
     </KeepRunningUntilFailure>

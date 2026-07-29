@@ -42,7 +42,7 @@ ats_sentry_behavior_server:
 
       topics:
         spin: cmd_spin
-        cmd_vel: cmd_vel
+        # P6 二：`cmd_vel` 直发通路已删除（与实车 profile 一致）。
         gimbal_cmd: cmd_gimbal
         robot_mode: decision/robot_mode
 
@@ -93,6 +93,34 @@ ats_sentry_behavior_server:
         resupply_enter_ammo: 50
         resupply_exit_ammo: 100
         assume_engage_when_status_missing: true
+
+      # P6 二：行为层输入源显式化。本文件服务的 `decision_vision_test.launch.py`
+      # 直接 include `bringup.launch.py` 且不覆盖 `planning_grid_owner`
+      # 与 `launch_localization_fusion`，因此该 profile 的实际属主是
+      # `rc_esdf_map`（`planning_grid_owner` 默认 `rc_esdf`）和
+      # `localization_fusion`（默认 `True`）——不是 Nav2-free profile 的
+      # `ats_rog_map_adapter`。两个属主互斥，`/rc_esdf/planning_grid` 仍只有
+      # 一个发布者，且 `rc_esdf_map` 的输出 QoS 与 adapter 完全一致
+      # （`rclcpp::QoS(1).reliable().transient_local()`），所以话题名和 QoS
+      # 与实车 profile 相同，只有新鲜度余量按本 profile 的发布节奏另算。
+      # 注意该 profile 的 `launch_nav2` 仍是默认 `True`，`global_costmap/costmap`
+      # 同时存在，但行为层不再订阅它：视觉跟随的可通行判据只认权威规划栅格。
+      inputs:
+        planning_grid:
+          topic: /rc_esdf/planning_grid
+          qos_depth: 1
+          qos_reliable: true
+          qos_transient_local: true
+          # `rc_esdf_map` 是事件驱动发布（每收到一帧 `traversability_grid`
+          # 就融合并发布），上游 `terrain_analysis_ext` 又由新点云触发，
+          # 因此正常节奏远快于实车 adapter 的 2 Hz；这里沿用 2.0 s
+          # 只是告警阈值，不构成额外的时间基准。
+          timeout_s: 2.0
+        localization:
+          # 唯一发布者是 `localization_fusion`（`SensorDataQoS`，best_effort）。
+          topic: /localization
+          qos_depth: 5
+          qos_reliable: false
 
       pose:
         expected_frame: map

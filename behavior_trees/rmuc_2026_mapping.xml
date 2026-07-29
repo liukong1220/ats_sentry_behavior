@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- P6 二：官方 RMUC 树的统一导航执行接口是
+     `ats_navigation_interfaces/action/NavigateToPose` on `/ats_navigate_to_pose`
+     （服务端 `ats_goal_manager_node`）。约束：
+     1. 终端成功只能来自 action 的 `RESULT_SUCCEEDED`，不得用 `IsPathGoalReached`
+        的位置容差替代；「已到达就不重发」的记忆放在 `SendAtsNavGoal` 的航点状态机里。
+     2. 官方树禁止 `PublishTwist`：行为层不得绕过 `/planner/execution_command`
+        直发 Twist 到底盘。
+     3. 旧的 `SendNavThroughPoses` / `SendNav2Goal` / `PublishTwist` 只保留在
+        明确标注的 Nav2 对照 profile（`dev_rm.xml`、`rmul_2025.xml`）。 -->
 <root BTCPP_format="4">
   <BehaviorTree ID="rmuc_vision_override_realtime">
     <Sequence>
@@ -21,16 +30,8 @@
                               current_pose="{@decision_current_pose}"
                               current_costmap="{@nav_globalCostmap}"
                               path="{decision_path}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 
@@ -49,11 +50,11 @@
           <PublishSpinSpeed spin_speed="0.0"
                             duration="0.0"
                             topic_name="{@decision_spin_topic}"/>
-          <PublishTwist v_y="0.0"
-                        v_yaw="0.0"
-                        v_x="0.0"
-                        duration="0.0"
-                        topic_name="{@decision_cmd_vel_topic}"/>
+          <!-- 开局未到时的停车由授权链负责：本子树返回 FAILURE 会让主树的
+               ReactiveSequence 直接 halt 后面的导航分支，`SendAtsNavGoal` 在
+               halt 中 cancel 目标，目标管理器随即发 `ExecutionCommand STOP`，
+               经 `emergency_stop=true -> /cmd_vel_mpc=0 -> /motion_control=0`
+               到串口零速度。行为层不得再直发 Twist 绕过这条链。 -->
         </Sequence>
       </ForceFailure>
     </Fallback>
@@ -62,16 +63,8 @@
   <BehaviorTree ID="rmuc_decision_supply">
     <Sequence>
       <SelectSupplyPoint path="{decision_path}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 
@@ -86,16 +79,8 @@
       <LoadCsvWaypoints csv_file="{@decision_rmuc_csv_file}"
                         patrol_mode="false"
                         path="{decision_path}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 
@@ -108,21 +93,16 @@
                         path="{decision_path}"
                         next_cursor="{decision_next_patrol_cursor}"
                         next_direction="{decision_next_patrol_direction}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-          <AdvancePatrolCursor next_cursor="{decision_next_patrol_cursor}"
-                               next_direction="{decision_next_patrol_direction}"
-                               patrol_cursor="{decision_patrol_cursor}"
-                               patrol_direction="{decision_patrol_direction}"
-                               goal_succeeded="{decision_nav_goal_succeeded}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <!-- 巡逻游标推进只能由 ATS action 的终端成功驱动：
+           `SendAtsNavGoal` 返回 SUCCESS 表示当前航点拿到了 `RESULT_SUCCEEDED`，
+           之后 `AdvancePatrolCursor` 才推进 cursor 并把 goal_succeeded 复位。 -->
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
+      <AdvancePatrolCursor next_cursor="{decision_next_patrol_cursor}"
+                           next_direction="{decision_next_patrol_direction}"
+                           patrol_cursor="{decision_patrol_cursor}"
+                           patrol_direction="{decision_patrol_direction}"
+                           goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 

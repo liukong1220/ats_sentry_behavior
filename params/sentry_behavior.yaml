@@ -1,6 +1,11 @@
 ats_sentry_behavior_server:
   ros__parameters:
-    use_sim_time: true
+    # 本文件是实车 profile 的行为参数来源（`ats_sentry_bringup/bringup.launch.py`
+    # 的 `behavior_params_file` 默认值）。实车用挂钟，因此文件级默认必须是 false；
+    # 仿真回归各自使用 `sentry_behavior_loopback.yaml` 或由 launch 覆盖。
+    # 若此处为 true 而 launch 覆盖成 false，全链 0.5 s 租约与 stale 判据的
+    # 时间基准会在"覆盖失效"时静默错位，属于停止条件而非降级项。
+    use_sim_time: false
     action_name: ats_sentry_behavior
     tick_frequency: 15
     groot2_port: 17777
@@ -40,7 +45,8 @@ ats_sentry_behavior_server:
 
       topics:
         spin: cmd_spin
-        cmd_vel: cmd_vel
+        # P6 二：`cmd_vel` 直发通路已删除。行为层不得绕过
+        # `/planner/execution_command` 直发 Twist 到底盘。
         gimbal_cmd: cmd_gimbal
         # 哨兵姿态模式话题：
         # 3=move，1=attack，2=defend。
@@ -145,6 +151,29 @@ ats_sentry_behavior_server:
         # 在尚未收到过可信非零弹丸值前，不让这个 0 直接触发补给。
         require_valid_ammo_before_resupply: true
 
+      # P6 二：行为层输入的权威源、QoS 与新鲜度阈值。本文件是实车 profile 的
+      # 唯一权威来源，不得在 launch 或 node_params.yaml 另给一份不同数值。
+      inputs:
+        planning_grid:
+          # Nav2-free profile 的唯一发布者是 `ats_rog_map_adapter`。
+          # 编码：-1 未知，0 已知可通行，100 占据。
+          topic: /rc_esdf/planning_grid
+          # 必须与发布端 `rclcpp::QoS(1).reliable().transient_local()` 一致，
+          # 否则拿不到 latched 历史样本，会把"地图未就绪"看成"从未发布"。
+          qos_depth: 1
+          qos_reliable: true
+          qos_transient_local: true
+          # latched 样本必须靠时间戳判 stale。发布端 projection_rate_hz=2.0
+          # （0.5 s 一帧），2.0 s 给 4 帧余量。
+          timeout_s: 2.0
+        localization:
+          # 唯一发布者是 `localization_fusion`（`SensorDataQoS`）。
+          # 行为层不再同时订阅 `odom` 与 `odometry`：两路时间基准不同时，
+          # "谁最后到达"会静默决定黑板位姿，无法判定新鲜度。
+          topic: /localization
+          qos_depth: 5
+          qos_reliable: false
+
       pose:
         # 行为树默认认为导航位姿应处在这个坐标系下。
         expected_frame: map
@@ -180,6 +209,14 @@ ats_sentry_behavior_server:
 
       decision_config:
         path_tolerance: 0.2
+        # 官方 profile 的统一导航执行接口（P6 二）：
+        # `ats_navigation_interfaces/action/NavigateToPose` on `/ats_navigate_to_pose`，
+        # 服务端是 `ats_goal_manager_node`。本文件是该名字的唯一权威来源。
+        ats_action_server: "/ats_navigate_to_pose"
+        # 单航点执行超时上界，单位 s。0 表示使用目标管理器的服务端默认值。
+        ats_goal_timeout_s: 0.0
+        # 下面两项只服务于明确标注的 Nav2 对照 profile（legacy 树 dev_rm / rmul_2025）。
+        # 官方 RMUC/RMUL 树不得再引用它们。
         nav2_action_server: "/navigate_through_poses"
         nav2_to_pose_action_server: "/navigate_to_pose"
         decision_period_ms: 100
@@ -213,7 +250,8 @@ ats_sentry_behavior_server:
 
 ats_sentry_behavior_client:
   ros__parameters:
-    use_sim_time: true
+    # 与 server 同一时间基准，实车挂钟；理由同上。
+    use_sim_time: false
     goal_retry_delay_ms: 100
     # 可选：
     #   rmuc_2026_mapping     = 建图/补给/后期巡航综合决策

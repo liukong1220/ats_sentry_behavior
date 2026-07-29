@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- P6 二：官方 RMUC 备用树同样使用
+     `ats_navigation_interfaces/action/NavigateToPose` on `/ats_navigate_to_pose`。
+     终端成功只认 `RESULT_SUCCEEDED`；禁止 `PublishTwist` 直发底盘；
+     旧 Nav2 节点只保留在 `dev_rm.xml`、`rmul_2025.xml` 对照 profile。 -->
 <root BTCPP_format="4">
   <BehaviorTree ID="rmuc_patrol_only_vision_override_realtime">
     <Sequence>
@@ -21,16 +25,8 @@
                               current_pose="{@decision_current_pose}"
                               current_costmap="{@nav_globalCostmap}"
                               path="{decision_path}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 
@@ -53,16 +49,8 @@
                               current_pose="{@decision_current_pose}"
                               current_costmap="{@nav_globalCostmap}"
                               path="{decision_path}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 
@@ -81,11 +69,9 @@
           <PublishSpinSpeed spin_speed="0.0"
                             duration="0.0"
                             topic_name="{@decision_spin_topic}"/>
-          <PublishTwist v_y="0.0"
-                        v_yaw="0.0"
-                        v_x="0.0"
-                        duration="0.0"
-                        topic_name="{@decision_cmd_vel_topic}"/>
+          <!-- 开局未到时的停车由授权链负责（同 `rmuc_2026_mapping.xml`）：
+               子树 FAILURE -> 主树 halt 导航分支 -> `SendAtsNavGoal` cancel ->
+               目标管理器 `ExecutionCommand STOP` -> 串口零速度。 -->
         </Sequence>
       </ForceFailure>
     </Fallback>
@@ -94,16 +80,8 @@
   <BehaviorTree ID="rmuc_patrol_only_decision_supply">
     <Sequence>
       <SelectSupplyPoint path="{decision_path}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 
@@ -118,16 +96,8 @@
       <LoadCsvWaypoints csv_file="{@decision_rmuc_patrol_csv_file}"
                         patrol_mode="false"
                         path="{decision_path}"/>
-      <Fallback>
-        <Sequence>
-          <IsPathGoalReached path="{decision_path}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"
-                             current_pose="{@decision_current_pose}"/>
-        </Sequence>
-        <SendNavThroughPoses path="{decision_path}"
-                             current_pose="{@decision_current_pose}"
-                             goal_succeeded="{decision_nav_goal_succeeded}"/>
-      </Fallback>
+      <SendAtsNavGoal path="{decision_path}"
+                      goal_succeeded="{decision_nav_goal_succeeded}"/>
     </Sequence>
   </BehaviorTree>
 
