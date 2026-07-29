@@ -25,6 +25,8 @@
   <depend>nav_msgs</depend>
   <depend>behaviortree_ros2</depend>
   <depend>ats_rm_interfaces</depend>
+  <!-- ATS 导航 action / 执行授权消息：官方 profile 的统一导航接口来源。 -->
+  <depend>ats_navigation_interfaces</depend>
   <depend>sp_msgs</depend>
   <depend>nav2_msgs</depend>
   <depend>sensor_msgs</depend>
@@ -36,6 +38,7 @@
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>
   <test_depend>ament_cmake_black</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
 
 <export>
   <build_type>ament_cmake</build_type>

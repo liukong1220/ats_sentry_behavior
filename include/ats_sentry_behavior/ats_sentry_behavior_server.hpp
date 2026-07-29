@@ -68,6 +68,8 @@ private:
   void declareDecisionParameters();
   void initializeDecisionBlackboard();
   void logDecisionSnapshot();
+  /// 判 `planning_grid` 的 latched 旧样本：只告警，不在行为层伪造停车。
+  void checkPlanningGridFreshness();
 
   std::vector<std::shared_ptr<rclcpp::SubscriptionBase>> subscriptions_;
   std::shared_ptr<BT::StdCoutLogger> logger_cout_;
@@ -89,6 +91,16 @@ private:
   std::vector<std::string> pose_base_frame_candidates_{"base_footprint", "base_link"};
   double pose_timeout_s_ = 0.5;
   bool pose_tf_fallback_enabled_ = true;
+  // P6 二：行为层输入的权威源与 QoS 显式化，默认值对齐 Nav2-free profile 的
+  // 唯一发布者（`ats_rog_map_adapter` 与 `localization_fusion`）。
+  std::string planning_grid_topic_ = "/rc_esdf/planning_grid";
+  int planning_grid_qos_depth_ = 1;
+  bool planning_grid_qos_reliable_ = true;
+  bool planning_grid_qos_transient_local_ = true;
+  double planning_grid_timeout_s_ = 2.0;
+  std::string localization_topic_ = "/localization";
+  int localization_qos_depth_ = 5;
+  bool localization_qos_reliable_ = false;
   std::string last_decision_summary_;
 };
 

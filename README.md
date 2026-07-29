@@ -40,22 +40,29 @@
   -> 行为树黑板
   -> rmul_2026
   -> 决定当前路径 / 姿态模式 / 自旋 / 云台
-  -> /navigate_through_poses + decision/robot_mode + cmd_spin + cmd_gimbal
+  -> /ats_navigate_to_pose + decision/robot_mode + cmd_gimbal
 ```
 
 ## 当前关键功能
 
 ### 1. 路径输出
 
-当前统一执行接口是：
+正式 profile 的统一执行接口是（P6 二迁移完成）：
 
-- `/navigate_through_poses`
+- `/ats_navigate_to_pose`，类型 `ats_navigation_interfaces/action/NavigateToPose`
 
 对应动作节点：
 
+- [plugins/action/send_ats_nav_goal.cpp](./plugins/action/send_ats_nav_goal.cpp)
+
+服务端是 `ats_goal_manager`，它是 `/planner/execution_command` 的唯一生产者。
+
+对照 profile（仅供 Nav2 基线比较）仍保留 Nav2 接口：
+
+- `/navigate_through_poses`、`/navigate_to_pose`，类型 `nav2_msgs/action/*`
 - [plugins/action/send_nav_through_poses.cpp](./plugins/action/send_nav_through_poses.cpp)
 
-当前不再把旧 `NavigateToPose` 作为主链接口。
+两者互斥：Nav2-free 入口下 `bt_navigator` 不存在，Nav2 节点会因 server 不可用返回失败。
 
 ### 2. 姿态切换
 
@@ -131,9 +138,9 @@
 
 ### 核心输出
 
-- `/navigate_through_poses`
+- `/ats_navigate_to_pose`（正式 profile；对照 profile 为 `/navigate_through_poses`）
 - `decision/robot_mode`
-- `cmd_spin`
+- `cmd_spin`（仅对照 profile；正式 profile 禁止在 MPC 之后叠加车体 `wz`）
 - `cmd_gimbal`
 - `decision/vision_follow_markers`
 - `decision/robot_mode_markers`

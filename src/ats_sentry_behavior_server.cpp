@@ -131,6 +131,15 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   node()->get_parameter("decision.pose.expected_frame", pose_expected_frame_);
   node()->get_parameter("decision.pose.timeout_s", pose_timeout_s_);
   node()->get_parameter("decision.pose.tf_fallback_enabled", pose_tf_fallback_enabled_);
+  node()->get_parameter("decision.inputs.planning_grid.topic", planning_grid_topic_);
+  node()->get_parameter("decision.inputs.planning_grid.qos_depth", planning_grid_qos_depth_);
+  node()->get_parameter("decision.inputs.planning_grid.qos_reliable", planning_grid_qos_reliable_);
+  node()->get_parameter(
+    "decision.inputs.planning_grid.qos_transient_local", planning_grid_qos_transient_local_);
+  node()->get_parameter("decision.inputs.planning_grid.timeout_s", planning_grid_timeout_s_);
+  node()->get_parameter("decision.inputs.localization.topic", localization_topic_);
+  node()->get_parameter("decision.inputs.localization.qos_depth", localization_qos_depth_);
+  node()->get_parameter("decision.inputs.localization.qos_reliable", localization_qos_reliable_);
   decision_input_source_ = sanitizeInputSource(decision_input_source_, node()->get_logger());
   decision_sim_mode_ = sanitizeSimulationMode(
     decision_sim_mode_, "patrol", node()->get_logger(),
@@ -150,23 +159,77 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   // 视觉融合状态直接进入根黑板，供行为树条件节点统一消费。
   subscribe<sp_msgs::msg::VisionTargetMsg>(decision_vision_topic_, "sp_vision_target");
 
-  auto costmap_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+  // P6 二：行为层的栅格输入改成自研链的权威源 `/rc_esdf/planning_grid`
+  // （Nav2-free profile 里由 `ats_rog_map_adapter` 独家发布，QoS
+  // `KeepLast(1) reliable transient_local`，与发布端 `output_qos` 完全一致）。
+  // 原来的 `global_costmap/costmap` 只在 Nav2 对照 profile 存在；本轮把
+  // 话题名和 QoS 都提为显式参数，避免"改了 profile 但行为层还盯着 Nav2 话题"。
+  // 语义提醒：`planning_grid` 的 `-1` 表示未知（`unknown_is_obstacle` 时保持
+  // `-1`），`100` 表示占据；`select_vision_follow_path` 的 `isTraversable()`
+  // 判据是 `cell >= 0 && cell < occupied_threshold`，与该编码一致。
+  auto planning_grid_qos =
+    rclcpp::QoS(rclcpp::KeepLast(std::max<int>(1, planning_grid_qos_depth_)));
+  if (planning_grid_qos_reliable_) {
+    planning_grid_qos.reliable();
+  } else {
+    planning_grid_qos.best_effort();
+  }
+  if (planning_grid_qos_transient_local_) {
+    planning_grid_qos.transient_local();
+  }
   subscribe<nav_msgs::msg::OccupancyGrid>(
-    "global_costmap/costmap", "nav_globalCostmap", costmap_qos);
+    planning_grid_topic_, "nav_globalCostmap", planning_grid_qos);
 
-  auto odom_callback = [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
-      geometry_msgs::msg::PoseStamped pose;
-      pose.header = msg->header;
-      pose.pose = msg->pose.pose;
-      // 优先沿用 odom 订阅位姿，保证正常行驶时规划用的是导航反馈主链路。
-      globalBlackboard()->set("decision_current_pose", pose);
-    };
-  subscriptions_.push_back(
-    node()->create_subscription<nav_msgs::msg::Odometry>("odom", 10, odom_callback));
-  subscriptions_.push_back(
-    node()->create_subscription<nav_msgs::msg::Odometry>("odometry", 10, odom_callback));
+  // P6 二：当前位姿改成权威源 `/localization`（`localization_fusion` 是唯一
+  // 发布者，`SensorDataQoS`）。原来同时订阅 `odom` 与 `odometry` 会让"谁最后
+  // 到达"决定黑板位姿，两路时间基准不同时无法判定 freshness；现在只留一个
+  // 显式话题参数，freshness 仍由 `decision.pose.timeout_s` 与 TF 兜底裁决。
+  auto localization_callback = [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header = msg->header;
+    pose.pose = msg->pose.pose;
+    // `/localization` 的契约帧是 `odom`（`localization_fusion` 只用唯一的
+    // `map->odom` 表达全局修正），而决策目标点、CSV 航点和
+    // `decision.pose.expected_frame` 都在 `map`。原实现直接把 odom 系位姿写进
+    // 黑板：`map->odom` 非单位时，到点判断和视觉跟随选点会整体偏移一个修正量。
+    // 这里显式做一次 TF 变换；拿不到变换时不写黑板，交给 tick 后的 TF 兜底，
+    // 不静默写入一个坐标系不对的位姿。
+    if (
+      !pose_expected_frame_.empty() && !pose.header.frame_id.empty() &&
+      pose.header.frame_id != pose_expected_frame_) {
+      try {
+        pose = tf_buffer_->transform(pose, pose_expected_frame_, tf2::durationFromSec(0.0));
+      } catch (const tf2::TransformException & ex) {
+        RCLCPP_WARN_THROTTLE(
+          node()->get_logger(), *node()->get_clock(), 2000,
+          "定位位姿无法从 '%s' 变换到 '%s'：%s；本帧不更新黑板位姿。", pose.header.frame_id.c_str(),
+          pose_expected_frame_.c_str(), ex.what());
+        return;
+      }
+    }
+    globalBlackboard()->set("decision_current_pose", pose);
+  };
+  auto localization_qos = rclcpp::QoS(rclcpp::KeepLast(std::max<int>(1, localization_qos_depth_)));
+  if (localization_qos_reliable_) {
+    localization_qos.reliable();
+  } else {
+    localization_qos.best_effort();
+  }
+  subscriptions_.push_back(node()->create_subscription<nav_msgs::msg::Odometry>(
+    localization_topic_, localization_qos, localization_callback));
+  RCLCPP_INFO(
+    node()->get_logger(),
+    "决策输入权威源：planning_grid='%s'(depth=%d reliable=%d transient_local=%d) "
+    "localization='%s'(depth=%d reliable=%d) freshness: pose_timeout=%.3f s "
+    "grid_timeout=%.3f s",
+    planning_grid_topic_.c_str(), planning_grid_qos_depth_,
+    static_cast<int>(planning_grid_qos_reliable_),
+    static_cast<int>(planning_grid_qos_transient_local_), localization_topic_.c_str(),
+    localization_qos_depth_, static_cast<int>(localization_qos_reliable_), pose_timeout_s_,
+    planning_grid_timeout_s_);
 
-  auto sim_mode_callback = [this](const std_msgs::msg::String::SharedPtr msg) {
+  auto sim_mode_callback =
+    [this](const std_msgs::msg::String::SharedPtr msg) {
       const auto normalized_mode = normalizeToken(msg->data);
       if (!isSupportedSimulationMode(normalized_mode)) {
         RCLCPP_WARN(
@@ -215,7 +278,11 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.referee.start_gate.max_remain_time", 420);
 
   declare_parameter("decision.topics.spin", std::string("cmd_spin"));
-  declare_parameter("decision.topics.cmd_vel", std::string("cmd_vel"));
+  // P6 二：`decision.topics.cmd_vel` 已删除。行为层不得再持有直发底盘的 Twist 通路，
+  // 唯一执行授权是 `/planner/execution_command`；停车靠 halt/cancel 触发
+  // `ExecutionCommand STOP -> emergency_stop=true -> /cmd_vel_mpc=0 ->
+  // /motion_control=0 -> 串口零速度`。旧 `PublishTwist` 只留在 Nav2 对照 profile，
+  // 且那些树把 `topic_name` 硬编码为 `cmd_vel`，不依赖本参数。
   declare_parameter("decision.topics.gimbal_cmd", std::string("cmd_gimbal"));
   declare_parameter("decision.topics.robot_mode", std::string("decision/robot_mode"));
   declare_parameter("decision.motion.default_spin_speed", 0.0);
@@ -278,6 +345,23 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.pose.timeout_s", 0.5);
   declare_parameter("decision.pose.tf_fallback_enabled", true);
 
+  // P6 二：行为层输入的权威源、QoS 与新鲜度阈值全部显式化。
+  // 1. `planning_grid`：Nav2-free profile 由 `ats_rog_map_adapter` 独家发布，
+  //    发布端 QoS 是 `KeepLast(1) reliable transient_local`，订阅端必须一致，
+  //    否则 transient_local 的历史样本拿不到，地图未就绪会被误判成"已就绪"。
+  // 2. `localization`：`localization_fusion` 是唯一发布者，用 `SensorDataQoS`
+  //    （`KeepLast(5) best_effort volatile`），所以这里默认 best_effort。
+  // 3. freshness：`planning_grid` 是 latched，`transient_local` 的旧样本必须靠
+  //    时间戳判 stale，不能靠"有没有收到"判就绪。
+  declare_parameter("decision.inputs.planning_grid.topic", std::string("/rc_esdf/planning_grid"));
+  declare_parameter("decision.inputs.planning_grid.qos_depth", 1);
+  declare_parameter("decision.inputs.planning_grid.qos_reliable", true);
+  declare_parameter("decision.inputs.planning_grid.qos_transient_local", true);
+  declare_parameter("decision.inputs.planning_grid.timeout_s", 2.0);
+  declare_parameter("decision.inputs.localization.topic", std::string("/localization"));
+  declare_parameter("decision.inputs.localization.qos_depth", 5);
+  declare_parameter("decision.inputs.localization.qos_reliable", false);
+
   declare_parameter("decision.time_thresholds.abundant", 300);
   declare_parameter("decision.time_thresholds.normal", 240);
   declare_parameter("decision.time_thresholds.tense", 120);
@@ -325,6 +409,14 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.decision_config.waypoint_stop_duration_s", 0.0);
   declare_parameter("decision.decision_config.patrol_preview_points", 1);
   declare_parameter("decision.decision_config.action_server_wait_timeout_s", 0.5);
+  // 官方 profile 的统一导航执行接口：
+  // `ats_navigation_interfaces/action/NavigateToPose` on `/ats_navigate_to_pose`。
+  // 上面的 nav2_* 两项只服务于明确标注的 Nav2 对照 profile。
+  declare_parameter(
+    "decision.decision_config.ats_action_server", std::string("/ats_navigate_to_pose"));
+  // 单个航点的执行超时上界。<=0 时按 action 定义交由目标管理器的服务端默认值决定，
+  // 不在行为层另造一套超时口径。
+  declare_parameter("decision.decision_config.ats_goal_timeout_s", 0.0);
 
   declare_parameter("decision.rmuc.csv_waypoints_file", std::string("params/rmuc_waypoints.csv"));
   declare_parameter(
@@ -344,7 +436,6 @@ void SentryBehaviorServer::initializeDecisionBlackboard()
   int game_start_min_remain_time = 0;
   int game_start_max_remain_time = 420;
   std::string spin_topic = "cmd_spin";
-  std::string cmd_vel_topic = "cmd_vel";
   std::string gimbal_topic = "cmd_gimbal";
   std::string robot_mode_topic = "decision/robot_mode";
   double default_spin_speed = 0.0;
@@ -369,7 +460,6 @@ void SentryBehaviorServer::initializeDecisionBlackboard()
   node()->get_parameter(
     "decision.referee.start_gate.max_remain_time", game_start_max_remain_time);
   node()->get_parameter("decision.topics.spin", spin_topic);
-  node()->get_parameter("decision.topics.cmd_vel", cmd_vel_topic);
   node()->get_parameter("decision.topics.gimbal_cmd", gimbal_topic);
   // 姿态模式话题：行为树发布，standard_robot_pp_ros2 订阅后再下发给下位机。
   node()->get_parameter("decision.topics.robot_mode", robot_mode_topic);
@@ -401,7 +491,7 @@ void SentryBehaviorServer::initializeDecisionBlackboard()
   globalBlackboard()->set(
     "decision_game_start_max_remain_time", game_start_max_remain_time);
   globalBlackboard()->set("decision_spin_topic", spin_topic);
-  globalBlackboard()->set("decision_cmd_vel_topic", cmd_vel_topic);
+  // P6 二：`decision_cmd_vel_topic` 黑板项已删除，官方树不再有直发 Twist 的入口。
   // 把行为树运行时会直接引用的参数注入黑板，
   // 这样 XML 可以通过 {@...} 形式直接取值，避免把常量写死在树文件中。
   globalBlackboard()->set("decision_gimbal_topic", gimbal_topic);
@@ -452,6 +542,7 @@ std::optional<BT::NodeStatus> SentryBehaviorServer::onLoopAfterTick(BT::NodeStat
 {
   ++tick_count_;
   logDecisionSnapshot();
+  checkPlanningGridFreshness();
 
   if (!pose_tf_fallback_enabled_) {
     return std::nullopt;
@@ -498,6 +589,41 @@ std::optional<BT::NodeStatus> SentryBehaviorServer::onLoopAfterTick(BT::NodeStat
     "decision_current_pose is stale and TF fallback failed for frame '%s'",
     pose_expected_frame_.c_str());
   return std::nullopt;
+}
+
+void SentryBehaviorServer::checkPlanningGridFreshness()
+{
+  if (planning_grid_timeout_s_ <= 0.0) {
+    return;
+  }
+
+  nav_msgs::msg::OccupancyGrid grid;
+  if (!globalBlackboard()->get("nav_globalCostmap", grid)) {
+    RCLCPP_WARN_THROTTLE(
+      node()->get_logger(), *node()->get_clock(), 2000,
+      "规划栅格 '%s' 尚未收到任何样本：行为层不得据此认为地图已就绪。",
+      planning_grid_topic_.c_str());
+    return;
+  }
+
+  // `transient_local` 会把旧样本重放给新订阅者，所以"收到过"不等于"是新的"。
+  // 这里只做告警，不在行为层伪造停车：唯一执行授权仍是
+  // `/planner/execution_command`，地图不就绪由目标管理器判 `MAP_UNREADY`。
+  const rclcpp::Time stamp(grid.header.stamp);
+  if (stamp.nanoseconds() == 0) {
+    RCLCPP_WARN_THROTTLE(
+      node()->get_logger(), *node()->get_clock(), 2000,
+      "规划栅格 '%s' 的时间戳为 0，无法判定新鲜度。", planning_grid_topic_.c_str());
+    return;
+  }
+
+  const double age = (node()->now() - stamp).seconds();
+  if (age > planning_grid_timeout_s_) {
+    RCLCPP_WARN_THROTTLE(
+      node()->get_logger(), *node()->get_clock(), 2000,
+      "规划栅格 '%s' 已过期：age=%.3f s > %.3f s（可能是 latched 旧样本）。",
+      planning_grid_topic_.c_str(), age, planning_grid_timeout_s_);
+  }
 }
 
 void SentryBehaviorServer::logDecisionSnapshot()
