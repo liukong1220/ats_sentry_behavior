@@ -21,7 +21,15 @@
 namespace ats_sentry_behavior
 {
 
-class SendNavThroughPosesAction : public BT::SyncActionNode
+/// Nav2 对照 profile 的导航执行节点。
+///
+/// 这里必须是 `BT::StatefulActionNode` 而不是 `BT::SyncActionNode`：
+/// `SyncActionNode::halt()` 是 `final`（只做 `resetStatus()`），派生类无法插入
+/// `async_cancel_goal()`。原实现在 `async_send_goal()` 之后立刻返回 SUCCESS，
+/// 于是主树 halt 掉导航分支时，Nav2 侧的目标仍在执行，
+/// `ExecutionCommand STOP -> 串口零速度` 这条链在对照 profile 下整条失效。
+/// 改成 stateful 后：目标在飞行中返回 RUNNING，`onHalted()` 真正 cancel。
+class SendNavThroughPosesAction : public BT::StatefulActionNode
 {
 public:
   using NavigateThroughPoses = nav2_msgs::action::NavigateThroughPoses;
@@ -33,9 +41,17 @@ public:
 
   static BT::PortsList providedPorts();
 
-  BT::NodeStatus tick() override;
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
 
 private:
+  // onStart/onRunning 共用的判据主体。返回 RUNNING 表示目标仍在飞行中。
+  BT::NodeStatus evaluate();
+  // 非阻塞的 server 就绪判断。原实现在 tick 内调用
+  // `wait_for_action_server(2.0s)`，那是 sync tick 内的无界等待（最坏每拍阻塞
+  // 2 s，整棵树的反应性一起被拖死）。改为跨拍累计等待时长，超时才判 FAILURE。
+  BT::NodeStatus checkActionServerReady(bool is_single_pose_path);
   // 读取行为树根黑板中的最新决策位姿。
   // 这里只把 decision_current_pose 当作“外部观测输入”，
   // 绝不能反向把动作节点内部缓存的位姿再写回黑板。
@@ -97,12 +113,18 @@ private:
   double pose_timeout_s_ = 0.5;
   double active_goal_hold_tolerance_ = 0.45;
   double active_goal_min_resend_interval_s_ = 0.8;
+  // 上一次同一条路径以 ABORTED 收尾。用于把 Nav2 的失败真正上报给树，
+  // 而不是在同一条路径上无限重发。被 cancel 的目标不置该标志（cancel 是我们主动的）。
+  bool last_goal_aborted_ = false;
   // 视觉实时跟随比普通巡逻/退防更强调“目标点要及时刷新”，
   // 因此单独拆出一组更积极的保持阈值与最小重发间隔。
   double vision_active_goal_hold_tolerance_ = 0.18;
   double vision_active_goal_min_resend_interval_s_ = 0.25;
   rclcpp::Time last_goal_sent_at_{0, 0, RCL_ROS_TIME};
   bool has_last_goal_sent_at_ = false;
+  // server 就绪等待的跨拍累计起点。每次 onStart 重置。
+  rclcpp::Time server_wait_started_at_{0, 0, RCL_ROS_TIME};
+  bool has_server_wait_started_at_ = false;
 };
 
 }  // namespace ats_sentry_behavior
