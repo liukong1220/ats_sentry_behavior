@@ -116,7 +116,7 @@ bool SendNavThroughPosesAction::isActiveGoalStillReached(
 
 SendNavThroughPosesAction::SendNavThroughPosesAction(
   const std::string & name, const BT::NodeConfig & config)
-: BT::SyncActionNode(name, config),
+: BT::StatefulActionNode(name, config),
   node_(decision::getNodeFromBlackboard(*this)),
   tf_buffer_(std::make_shared<tf2_ros::Buffer>(node_->get_clock())),
   tf_listener_(std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, node_, false))
@@ -159,7 +159,54 @@ BT::PortsList SendNavThroughPosesAction::providedPorts()
       "Whether the current decision path already finished successfully")};
 }
 
-BT::NodeStatus SendNavThroughPosesAction::tick()
+BT::NodeStatus SendNavThroughPosesAction::onStart()
+{
+  has_server_wait_started_at_ = false;
+  return evaluate();
+}
+
+BT::NodeStatus SendNavThroughPosesAction::onRunning() { return evaluate(); }
+
+void SendNavThroughPosesAction::onHalted()
+{
+  // halt 是本节点唯一的停车入口：主树切换分支、上层判定不安全、
+  // `haltTree()` 都会走到这里。必须真的向 Nav2 发 cancel，
+  // 否则被 halt 的分支留下的目标会继续驱动底盘。
+  cancelCurrentGoal();
+  active_path_.poses.clear();
+  setOutput("goal_succeeded", false);
+  has_server_wait_started_at_ = false;
+}
+
+BT::NodeStatus SendNavThroughPosesAction::checkActionServerReady(bool is_single_pose_path)
+{
+  const auto & name = is_single_pose_path ? action_to_pose_name_ : action_name_;
+  // 0 超时 = 只查询当前状态，不阻塞。
+  const bool ready = is_single_pose_path ?
+    action_to_pose_client_->action_server_is_ready() :
+    action_client_->action_server_is_ready();
+  if (ready) {
+    has_server_wait_started_at_ = false;
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  const auto now = node_->now();
+  if (!has_server_wait_started_at_) {
+    server_wait_started_at_ = now;
+    has_server_wait_started_at_ = true;
+  }
+  const double waited_s = (now - server_wait_started_at_).seconds();
+  if (waited_s >= action_server_wait_timeout_s_) {
+    RCLCPP_ERROR(
+      logger_, "Action server %s is not available after %.2fs", name.c_str(), waited_s);
+    has_server_wait_started_at_ = false;
+    return BT::NodeStatus::FAILURE;
+  }
+  // 跨拍等待，不在 tick 内阻塞。
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus SendNavThroughPosesAction::evaluate()
 {
   auto path = getInput<nav_msgs::msg::Path>("path");
   if (!path || path->poses.empty()) {
@@ -168,18 +215,9 @@ BT::NodeStatus SendNavThroughPosesAction::tick()
   }
 
   const bool is_single_pose_path = path->poses.size() == 1;
-  const auto action_wait_timeout =
-    std::chrono::duration_cast<std::chrono::nanoseconds>(
-    std::chrono::duration<double>(action_server_wait_timeout_s_));
-  const bool action_server_ready = is_single_pose_path ?
-    action_to_pose_client_->wait_for_action_server(action_wait_timeout) :
-    action_client_->wait_for_action_server(action_wait_timeout);
-  if (!action_server_ready)
-  {
-    RCLCPP_ERROR(
-      logger_, "Action server %s is not available",
-      (is_single_pose_path ? action_to_pose_name_ : action_name_).c_str());
-    return BT::NodeStatus::FAILURE;
+  const auto server_status = checkActionServerReady(is_single_pose_path);
+  if (server_status != BT::NodeStatus::SUCCESS) {
+    return server_status;
   }
 
   {
@@ -201,14 +239,18 @@ BT::NodeStatus SendNavThroughPosesAction::tick()
       vision_active_goal_min_resend_interval_s_ : active_goal_min_resend_interval_s_;
     const bool near_active_path =
       decision::pathEquivalent(active_path_, *path, hold_tolerance);
+    // 单点路径走 NavigateToPose，句柄存在 `current_goal_to_pose_handle_` 里。
+    // 原实现只看 `current_goal_handle_`，于是单点目标在飞行中被判成“没有活动目标”
+    // 而反复重发。这里两个句柄一起看。
+    const bool goal_in_flight =
+      goal_pending_ || current_goal_handle_ || current_goal_to_pose_handle_;
     const bool active_goal_still_reached =
-      same_path && last_goal_succeeded_ && !goal_pending_ && !current_goal_handle_ &&
+      same_path && last_goal_succeeded_ && !goal_in_flight &&
       ((has_current_pose_ &&
       decision::isPathGoalReached(latest_pose_, *path, path_goal_reached_tolerance_)) ||
       isActiveGoalStillReached(*path, path_goal_reached_tolerance_));
     const bool same_path_goal_recently_succeeded =
-      same_path && last_goal_succeeded_ && !goal_pending_ && !current_goal_handle_ &&
-      !has_current_pose_;
+      same_path && last_goal_succeeded_ && !goal_in_flight && !has_current_pose_;
     setOutput(
       "goal_succeeded",
       active_goal_still_reached || same_path_goal_recently_succeeded);
@@ -217,12 +259,21 @@ BT::NodeStatus SendNavThroughPosesAction::tick()
       return BT::NodeStatus::SUCCESS;
     }
 
-    if ((goal_pending_ || current_goal_handle_) && same_path)
-    {
-      return BT::NodeStatus::SUCCESS;
+    // 同一条路径上一次以 ABORTED 收尾：必须把失败上报给树，由上层决定重试或换分支。
+    // 原实现在这里直接重发，失败永远不会传播出去。
+    if (same_path && last_goal_aborted_ && !goal_in_flight) {
+      last_goal_aborted_ = false;
+      active_path_.poses.clear();
+      return BT::NodeStatus::FAILURE;
     }
 
-    if ((goal_pending_ || current_goal_handle_) && near_active_path && has_last_goal_sent_at_) {
+    // 目标仍在飞行：返回 RUNNING。这也是 `onHalted()` 能被调用的前提
+    // （`StatefulActionNode::halt()` 只在状态为 RUNNING 时调 `onHalted()`）。
+    if (goal_in_flight && same_path) {
+      return BT::NodeStatus::RUNNING;
+    }
+
+    if (goal_in_flight && near_active_path && has_last_goal_sent_at_) {
       const double since_last_send_s = (node_->now() - last_goal_sent_at_).seconds();
       if (since_last_send_s < min_resend_interval_s) {
         RCLCPP_DEBUG_THROTTLE(
@@ -231,7 +282,7 @@ BT::NodeStatus SendNavThroughPosesAction::tick()
           "(dt=%.2fs hold_tol=%.2fm resend_interval=%.2fs vision=%d)",
           since_last_send_s, hold_tolerance, min_resend_interval_s,
           static_cast<int>(is_vision_follow_path));
-        return BT::NodeStatus::SUCCESS;
+        return BT::NodeStatus::RUNNING;
       }
     }
   }
@@ -284,7 +335,9 @@ BT::NodeStatus SendNavThroughPosesAction::tick()
       };
 
     action_to_pose_client_->async_send_goal(goal, send_goal_options);
-    return BT::NodeStatus::SUCCESS;
+    // 刚下发，结果未知：RUNNING。返回 SUCCESS 会让本节点立刻脱离 RUNNING，
+    // 之后 halt 不再调用 `onHalted()`，目标就无法被取消。
+    return BT::NodeStatus::RUNNING;
   }
 
   NavigateThroughPoses::Goal goal;
@@ -319,7 +372,7 @@ BT::NodeStatus SendNavThroughPosesAction::tick()
     };
 
   action_client_->async_send_goal(goal, send_goal_options);
-  return BT::NodeStatus::SUCCESS;
+  return BT::NodeStatus::RUNNING;
 }
 
 void SendNavThroughPosesAction::goalResponseCallback(
@@ -389,6 +442,7 @@ void SendNavThroughPosesAction::resultCallback(
   current_goal_handle_.reset();
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     last_goal_succeeded_ = true;
+    last_goal_aborted_ = false;
     if (!active_path_.poses.empty()) {
       latest_pose_ = active_path_.poses.back();
       has_current_pose_ = true;
@@ -399,10 +453,13 @@ void SendNavThroughPosesAction::resultCallback(
   last_goal_succeeded_ = false;
 
   if (result.code == rclcpp_action::ResultCode::CANCELED) {
+    // cancel 是我们主动发起的，不算“这条路径走不通”，因此不置 aborted。
+    last_goal_aborted_ = false;
     RCLCPP_INFO(logger_, "NavigateThroughPoses goal was canceled");
     return;
   }
 
+  last_goal_aborted_ = true;
   RCLCPP_WARN(
     logger_, "NavigateThroughPoses goal finished with result code %d",
     static_cast<int>(result.code));
@@ -420,6 +477,7 @@ void SendNavThroughPosesAction::resultToPoseCallback(
   current_goal_handle_.reset();
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     last_goal_succeeded_ = true;
+    last_goal_aborted_ = false;
     if (!active_path_.poses.empty()) {
       latest_pose_ = active_path_.poses.back();
       has_current_pose_ = true;
@@ -430,10 +488,12 @@ void SendNavThroughPosesAction::resultToPoseCallback(
   last_goal_succeeded_ = false;
 
   if (result.code == rclcpp_action::ResultCode::CANCELED) {
+    last_goal_aborted_ = false;
     RCLCPP_INFO(logger_, "NavigateToPose goal was canceled");
     return;
   }
 
+  last_goal_aborted_ = true;
   RCLCPP_WARN(
     logger_, "NavigateToPose goal finished with result code %d",
     static_cast<int>(result.code));
@@ -452,6 +512,7 @@ void SendNavThroughPosesAction::cancelCurrentGoal()
     current_goal_to_pose_handle_.reset();
     goal_pending_ = false;
     last_goal_succeeded_ = false;
+    last_goal_aborted_ = false;
   }
   if (goal_handle) {
     action_client_->async_cancel_goal(goal_handle);
