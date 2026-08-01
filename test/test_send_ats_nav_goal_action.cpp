@@ -13,6 +13,8 @@
 //     `RESULT_TIMEOUT` / `RESULT_MAP_UNREADY` 等一律 FAILURE；
 //  4. 航点状态机：多航点路径逐点下发，只有全部航点成功才输出
 //     `goal_succeeded=true`；中途失败必须从第一个航点重来。
+//  5. 服务端重启：旧 action server incarnation 的未完成目标不得污染重启后的
+//     新路径；在服务端缺席时 halt 仍是确定性的停车入口。
 //
 // 注意：本测试不判定任何位置容差。终端成功只来自服务端 result_code。
 
@@ -20,6 +22,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -50,6 +53,17 @@ class ScriptedNavServer
 public:
   explicit ScriptedNavServer(const rclcpp::Node::SharedPtr & node)
   {
+    startServing(node);
+  }
+
+  void stopServing()
+  {
+    server_.reset();
+  }
+
+  void startServing(const rclcpp::Node::SharedPtr & node)
+  {
+    const std::uint64_t incarnation = ++incarnation_;
     server_ = rclcpp_action::create_server<AtsNavigateToPose>(
       node, kActionName,
       [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const AtsNavigateToPose::Goal>) {
@@ -60,13 +74,13 @@ public:
         ++cancels_received_;
         return rclcpp_action::CancelResponse::ACCEPT;
       },
-      [this](const std::shared_ptr<GoalHandle> handle) {
+      [this, incarnation](const std::shared_ptr<GoalHandle> handle) {
         // 不能 detach：detach 后的线程持有裸 `this`，而 TearDown 会在
         // executor cancel 之后直接销毁本对象，线程再访问 `hold_`/`result_code_`
         // 就是 use-after-free（表现为约 20% 的 `free(): invalid pointer` 或段错误）。
         // 改为登记到 `workers_`，由析构函数统一 join。
         std::lock_guard<std::mutex> lock(workers_mutex_);
-        workers_.emplace_back([this, handle]() { execute(handle); });
+        workers_.emplace_back([this, handle, incarnation]() { execute(handle, incarnation); });
       });
   }
 
@@ -94,7 +108,7 @@ public:
   int cancelsReceived() const { return cancels_received_; }
 
 private:
-  void execute(const std::shared_ptr<GoalHandle> handle)
+  void execute(const std::shared_ptr<GoalHandle> handle, std::uint64_t incarnation)
   {
     auto result = std::make_shared<AtsNavigateToPose::Result>();
     result->result_code = result_code_;
@@ -102,10 +116,19 @@ private:
 
     // `shutting_down_` 是必需的退出条件：析构函数要 join 这些线程，
     // 若 hold 中的目标既没 release 也没 cancel，缺少该条件会死锁在 join 上。
-    while (hold_ && !release_ && !shutting_down_ && !handle->is_canceling() && rclcpp::ok()) {
+    while (
+      hold_ && !release_ && !shutting_down_ && incarnation == incarnation_ &&
+      !handle->is_canceling() && rclcpp::ok())
+    {
       std::this_thread::sleep_for(5ms);
     }
     release_ = false;
+
+    // 旧服务端已经退出时不得给它的 goal handle 补 result。这样测试的重启
+    // 边界与正式 Goal Manager 重启相同：旧 incarnation 只能失效，不能复活。
+    if (shutting_down_ || incarnation != incarnation_) {
+      return;
+    }
 
     if (handle->is_canceling()) {
       result->result_code = AtsNavigateToPose::Result::RESULT_CANCELED;
@@ -127,6 +150,7 @@ private:
   std::atomic<bool> shutting_down_{false};
   std::atomic<bool> hold_{false};
   std::atomic<bool> release_{false};
+  std::atomic<std::uint64_t> incarnation_{0};
   std::atomic<uint8_t> result_code_{AtsNavigateToPose::Result::RESULT_SUCCEEDED};
   std::atomic<int> goals_received_{0};
   std::atomic<int> cancels_received_{0};
@@ -440,6 +464,31 @@ TEST_F(SendAtsNavGoalTest, HaltOnStaleGoalHandleDoesNotThrow)
   // 紧接着 halt：新目标的 handle 尚未就绪，走的正是陈旧 handle 分支。
   ASSERT_NO_THROW(tree_->haltTree());
   EXPECT_FALSE(goalSucceeded());
+}
+
+// 服务端进程重启相当于 action server 的新 incarnation。重启前的 goal 不得在
+// 新服务端出现后复活；调用 halt 时也不得因旧 handle 抛异常而中断停车路径。
+TEST_F(SendAtsNavGoalTest, ServerRestartRejectsStaleGoalIncarnation)
+{
+  server_->setHold(true);
+  makeTree();
+  setPath(makePath(1));
+
+  tickUntilGoalsReceived(1);
+  ASSERT_EQ(server_->goalsReceived(), 1);
+
+  server_->stopServing();
+  ASSERT_NO_THROW(tree_->haltTree());
+  EXPECT_FALSE(goalSucceeded());
+
+  server_->startServing(server_node_);
+  server_->setHold(false);
+  server_->setResultCode(AtsNavigateToPose::Result::RESULT_SUCCEEDED);
+  setPath(makePath(1));
+
+  EXPECT_EQ(tickUntilSettled(), BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(goalSucceeded());
+  EXPECT_EQ(server_->goalsReceived(), 2);
 }
 
 // 空路径：判失败，且不得向服务端下发目标。
