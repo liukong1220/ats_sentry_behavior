@@ -215,10 +215,8 @@ ats_sentry_behavior_server:
         ats_action_server: "/ats_navigate_to_pose"
         # 单航点执行超时上界，单位 s。0 表示使用目标管理器的服务端默认值。
         ats_goal_timeout_s: 0.0
-        # 下面两项只服务于明确标注的 Nav2 对照 profile（legacy 树 dev_rm / rmul_2025）。
-        # 官方 RMUC/RMUL 树不得再引用它们。
-        nav2_action_server: "/navigate_through_poses"
-        nav2_to_pose_action_server: "/navigate_to_pose"
+        # Nav2 endpoint 只在 `sentry_behavior_loopback.yaml` 与专项对照配置中出现；
+        # 本正式 profile 不提供它们，官方 RMUC/RMUL 树只能调用 ATS action。
         decision_period_ms: 100
         goal_position_tolerance: 0.2
         # 行为层“是否到达目标”的判定容差，需要与实车 Nav2 goal checker 对齐。
@@ -260,4 +258,3 @@ ats_sentry_behavior_client:
     #   rmuc_2026_test_supply_point   = 无裁判测试：只跑 decision.rmuc.supply_point
     #   rmuc_2026_test_patrol_points  = 无裁判测试：只跑 rmuc_patrol_waypoints.csv
     target_tree: rmuc_2026_mapping
-  
