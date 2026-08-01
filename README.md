@@ -1,162 +1,160 @@
 # ats_sentry_behavior
 
-当前哨兵项目中的行为树决策包。
+ATS 哨兵行为树决策仓库，负责把比赛状态、视觉目标、资源状态和巡逻策略转换为
+可取消、可抢占的导航目标与云台/底盘模式请求。
 
-本包的当前职责是：
+> 当前正式参数已提供 ATS 自研 action `/ats_navigate_to_pose`；Nav2 action
+> 插件仍为明确的对照 profile 保留，尚未完成构建依赖清理。
 
-1. 订阅裁判系统、视觉、位姿、costmap 和仿真输入
-2. 在黑板中维护统一决策上下文
-3. 每个 tick 重新评估主树
-4. 输出路径、姿态模式、自旋速度和云台控制
+## 目录
 
-## 当前入口
+- [功能模块](#功能模块)
+- [依赖](#依赖)
+- [Quick Start](#quick-start)
+- [启动节点](#启动节点)
+- [输入输出](#输入输出)
+- [配置文件](#配置文件)
+- [数据流](#数据流)
+- [目录结构](#目录结构)
+- [测试与边界](#测试与边界)
+- [参考与致谢](#参考与致谢)
 
-启动文件：
+## 功能模块
 
-- [launch/ats_sentry_behavior_launch.py](./launch/ats_sentry_behavior_launch.py)
+| 模块 | 说明 |
+| :--- | :--- |
+| 行为树服务端/客户端 | 加载 XML、维护黑板并执行行为树 |
+| `SendAtsNavGoal` | 调用 `ats_navigation_interfaces/action/NavigateToPose` |
+| Nav2 对照插件 | `SendNav2Goal`、`SendNavThroughPoses`，仅用于基线 |
+| 目标选择 | 固定点、巡逻点、补给点、撤退点和视觉环绕目标 |
+| 视觉接管 | 基于目标有效性、可通行栅格和滞回生成局部目标 |
+| 资源门控 | 弹量、血量、受击、补给状态和比赛阶段决策 |
+| 姿态输出 | 云台角速度/绝对角、机器人模式与自旋命令 |
 
-当前主树：
+行为层选择“去哪里”和“何时取消/抢占”，不拥有地图融合、路径安全、MPC 或
+底盘速度最终授权。
 
-- [behavior_trees/rmul_2026.xml](./behavior_trees/rmul_2026.xml)
+## 依赖
 
-当前视觉专测树：
+- ROS 2 Humble
+- BehaviorTree.CPP/`behaviortree_ros2`
+- `ats_navigation_interfaces`、`ats_rm_interfaces`、`sp_msgs`
+- `geometry_msgs`、`nav_msgs`、`sensor_msgs`、`tf2_ros`
+- `nav2_msgs` 当前仅用于对照 action 插件
 
-- [behavior_trees/vision_test.xml](./behavior_trees/vision_test.xml)
+## Quick Start
 
-当前参数文件：
-
-- 实机主树：
-  [params/sentry_behavior.yaml](./params/sentry_behavior.yaml)
-- loopback 主树：
-  [params/sentry_behavior_loopback.yaml](./params/sentry_behavior_loopback.yaml)
-- 视觉专测：
-  [params/sentry_behavior_vision_test.yaml](./params/sentry_behavior_vision_test.yaml)
-
-## 当前主线
-
-```text
-裁判系统 / 视觉 / 当前位姿 / costmap / 仿真输入
-  -> ats_sentry_behavior_server
-  -> 行为树黑板
-  -> rmul_2026
-  -> 决定当前路径 / 姿态模式 / 自旋 / 云台
-  -> /ats_navigate_to_pose + decision/robot_mode + cmd_gimbal
+```bash
+cd /home/ats/ATS_2026_snetry_test
+source /opt/ros/humble/setup.bash
+MAKEFLAGS=-j1 colcon build --base-paths src \
+  --packages-up-to ats_sentry_behavior \
+  --parallel-workers 1 --symlink-install
+source install/setup.bash
 ```
 
-## 当前关键功能
+## 启动节点
 
-### 1. 路径输出
+```bash
+ros2 launch ats_sentry_behavior ats_sentry_behavior_launch.py \
+  params_file:=src/ats_sentry_behavior/params/sentry_behavior.yaml
+```
 
-正式 profile 的统一执行接口是（P6 二迁移完成）：
+正常部署由 `ats_sentry_bringup` 外层入口启动。launch 同时创建：
 
-- `/ats_navigate_to_pose`，类型 `ats_navigation_interfaces/action/NavigateToPose`
+- `ats_sentry_behavior_server`
+- `ats_sentry_behavior_client`
 
-对应动作节点：
+两者共享同一参数文件和 namespace。
 
-- [plugins/action/send_ats_nav_goal.cpp](./plugins/action/send_ats_nav_goal.cpp)
+## 输入输出
 
-服务端是 `ats_goal_manager`，它是 `/planner/execution_command` 的唯一生产者。
+### 导航接口
 
-对照 profile（仅供 Nav2 基线比较）仍保留 Nav2 接口：
+| Profile | Action | Server | 约束 |
+| :--- | :--- | :--- | :--- |
+| 正式 Nav2-free | `/ats_navigate_to_pose` | `ats_goal_manager` | 使用 `SendAtsNavGoal`，支持 feedback/result/cancel/preempt/timeout |
+| Nav2 对照 | `/navigate_to_pose`、`/navigate_through_poses` | Nav2 navigator | 只用于显式对照入口 |
 
-- `/navigate_through_poses`、`/navigate_to_pose`，类型 `nav2_msgs/action/*`
-- [plugins/action/send_nav_through_poses.cpp](./plugins/action/send_nav_through_poses.cpp)
+两组插件可以共存于源码，但运行 profile 必须互斥。Nav2-free 运行图中没有
+`bt_navigator`，不得让正式树回退调用 Nav2 action。
 
-两者互斥：Nav2-free 入口下 `bt_navigator` 不存在，Nav2 节点会因 server 不可用返回失败。
+### 主要输入
 
-### 2. 姿态切换
+- 视觉目标和敌方状态：来自 `sp_vision25`/`sp_msgs`。
+- 裁判系统、血量、弹量和比赛状态：来自 `ats_rm_interfaces`。
+- 当前位姿与定位状态：正式 profile 使用 `/localization` 与 `/localization/status`。
+- 地图状态：正式 profile 使用 `/rog_map_adapter/status`/`ready`。
+- 行为树启动/控制 action：`ats_sentry_behavior`。
 
-当前姿态模式固定映射为：
+### 主要输出
 
-- `move = 3`
-- `attack = 1`
-- `defend = 2`
+- ATS/Nav2 导航 action goal，取决于 profile。
+- 云台角速度、云台绝对角和 yaw authority 请求。
+- `decision/robot_mode`、`cmd_spin` 等模式输出。
+- 视觉跟随路径、候选点和 Marker 调试输出。
 
-发布节点：
+## 配置文件
 
-- [plugins/action/pub_robot_mode.cpp](./plugins/action/pub_robot_mode.cpp)
+| 文件 | 用途 |
+| :--- | :--- |
+| `params/sentry_behavior.yaml` | 正式实机参数，ATS action 名的当前权威来源 |
+| `params/sentry_behavior_loopback.yaml` | loopback/Nav2 对照 |
+| `params/sentry_behavior_decision_vision_test.yaml` | 视觉接管专项测试 |
+| `params/rmuc_waypoints.csv` | 场地目标点 |
+| `params/rmuc_patrol_waypoints.csv` | 巡逻序列 |
+| `behavior_trees/*.xml` | 行为树拓扑 |
 
-最终输出：
+未来“统一总 YAML”迁移只应统一 ROS 参数、topic、frame、QoS 和 timeout；行为树
+XML 与 CSV 仍保留为各自结构化资产，action 字段仍由 `.action` 定义。
 
-- `decision/robot_mode`
+## 数据流
 
-### 3. 视觉接管
+```text
+比赛状态 + 资源状态 + 视觉目标 + 定位/地图健康
+  -> behavior blackboard
+  -> 目标/模式选择与滞回
+  -> SendAtsNavGoal
+  -> /ats_navigate_to_pose
+  -> ats_goal_manager
+  -> feedback/result/cancel/preempt
+  -> behavior transition
+```
 
-当前视觉接管核心文件：
+主树 halt、模式切换和目标替换都必须传播 cancel/preempt。仅停止 tick 而不取消
+远端 action 会让旧目标继续执行，是 Nav2 移除阶段的重点回归项。
 
-- [plugins/condition/is_vision_target_valid.cpp](./plugins/condition/is_vision_target_valid.cpp)
-- [plugins/action/select_vision_follow_path.cpp](./plugins/action/select_vision_follow_path.cpp)
+## 目录结构
 
-当前视觉接管成立需要同时满足：
+```text
+ats_sentry_behavior/
+├── include/ats_sentry_behavior/
+├── plugins/
+│   ├── action/
+│   └── condition/
+├── src/
+├── behavior_trees/
+├── params/
+├── launch/
+└── test/
+```
 
-1. `tracking = true`
-2. `nav_hold = true`（若配置要求）
-3. 消息未超时
-4. 资源状态允许 `engage`
-5. `target_position_map` 可用
+## 测试与边界
 
-### 4. 资源门控
+```bash
+colcon test --base-paths src --packages-select ats_sentry_behavior
+colcon test-result --test-result-base build/ats_sentry_behavior --verbose
+```
 
-当前统一资源状态机：
+- **已验证**：README 中 action 名、参数入口和插件边界已静态核对。
+- **已实现未运行**：`SendAtsNavGoal` 对 ATS action 的正式接线。
+- **未验证**：本轮未运行 action cancel/preempt/timeout、扩大矩形或红框闭环。
+- **未完成**：从 CMake/package 清除 Nav2 对照依赖，以及所有行为树 XML 的 Nav2-free 运行验收。
 
-- [plugins/condition/is_robot_resource_mode.cpp](./plugins/condition/is_robot_resource_mode.cpp)
+工作区级说明见
+[行为树决策链路](../../docs/行为树决策链路.md)。
 
-当前资源状态：
+## 参考与致谢
 
-- `engage`
-- `resupply`
-- `defend`
-
-输入主要来自：
-
-- `referee/robot_status`
-
-### 5. 受击自旋
-
-当前受击检测：
-
-- [plugins/condition/is_attacked.cpp](./plugins/condition/is_attacked.cpp)
-
-当前自旋速度发布：
-
-- [plugins/action/pub_spin_speed.cpp](./plugins/action/pub_spin_speed.cpp)
-
-最终输出：
-
-- `cmd_spin`
-
-## 当前关键输入 / 输出
-
-### 核心输入
-
-- `referee/game_status`
-- `referee/robot_status`
-- `referee/rfid_status`
-- `vision/target`
-- `nav_globalCostmap`
-- `decision_current_pose`
-
-### 核心输出
-
-- `/ats_navigate_to_pose`（正式 profile；对照 profile 为 `/navigate_through_poses`）
-- `decision/robot_mode`
-- `cmd_spin`（仅对照 profile；正式 profile 禁止在 MPC 之后叠加车体 `wz`）
-- `cmd_gimbal`
-- `decision/vision_follow_markers`
-- `decision/robot_mode_markers`
-
-## 当前维护边界
-
-1. 改决策优先级、视觉接管、资源门控、姿态切换，优先改本包
-2. 改 planner / MPPI / smoother / 恢复行为，不在本包改，去 `ats_sentry_nav`
-3. 改实机总启动、参数整合、loopback 假输入，不在本包改，去 `ats_sentry_bringup`
-4. 改串口协议和模式字段映射，不在本包改，去 `standard_robot_pp_ros2`
-
-## 相关文档
-
-- [../../docs/总览.md](../../docs/总览.md)
-- [../../docs/融合.md](../../docs/融合.md)
-- [../../docs/sentry_bt_decision_checklist.md](../../docs/sentry_bt_decision_checklist.md)
-- [../../docs/sentry_posture_switch_logic.md](../../docs/sentry_posture_switch_logic.md)
-- [../../docs/视觉跟随仿真调试.md](../../docs/视觉跟随仿真调试.md)
-- [../../docs/实机视觉跟随优化方案.md](../../docs/实机视觉跟随优化方案.md)
+行为执行框架基于 BehaviorTree.CPP 与 BehaviorTree.ROS2；Nav2 action 仅作为当前
+baseline 依赖保留。许可证与版权以依赖仓库和本仓声明为准。
