@@ -81,7 +81,7 @@ BT::PortsList PublishDecisionGoalAction::providedPorts()
 {
   return {
     BT::InputPort<geometry_msgs::msg::PoseStamped>(
-      "goal", "{decision_goal_pose}", "Goal pose published to Nav2"),
+      "goal", "{decision_goal_pose}", "Goal pose published to the goal manager"),
     BT::InputPort<std::string>("topic_name", "goal_pose", "Goal pose topic name")};
 }
 

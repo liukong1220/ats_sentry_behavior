@@ -6,8 +6,7 @@
         的位置容差替代；「已到达就不重发」的记忆放在 `SendAtsNavGoal` 的航点状态机里。
      2. 官方树禁止 `PublishTwist`：行为层不得绕过 `/planner/execution_command`
         直发 Twist 到底盘。
-     3. 旧的 `SendNavThroughPoses` / `SendNav2Goal` / `PublishTwist` 只保留在
-        明确标注的 Nav2 对照 profile（`dev_rm.xml`、`rmul_2025.xml`）。 -->
+     3. 行为层只经 `SendAtsNavGoal` 进入目标管理器。 -->
 <root BTCPP_format="4">
   <BehaviorTree ID="rmuc_vision_override_realtime">
     <Sequence>

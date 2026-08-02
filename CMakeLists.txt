@@ -89,12 +89,6 @@ ament_auto_add_library(
 list(APPEND plugin_libs is_vision_target_valid)
 
 ####### Actions #######
-ament_auto_add_library(send_nav2_goal SHARED plugins/action/send_nav2_goal.cpp)
-list(APPEND plugin_libs send_nav2_goal)
-
-ament_auto_add_library(pub_nav2_goal SHARED plugins/action/pub_nav2_goal.cpp)
-list(APPEND plugin_libs pub_nav2_goal)
-
 ament_auto_add_library(pub_spin_speed SHARED plugins/action/pub_spin_speed.cpp)
 list(APPEND plugin_libs pub_spin_speed)
 
@@ -139,13 +133,10 @@ list(APPEND plugin_libs reset_low_hp_target)
 ament_auto_add_library(hold_stop_flag SHARED plugins/action/hold_stop_flag.cpp)
 list(APPEND plugin_libs hold_stop_flag)
 
-# 官方 profile 的统一导航执行接口：ats_navigation_interfaces/NavigateToPose
-# on /ats_navigate_to_pose。旧的 send_nav_through_poses 只保留给对照 profile。
+# 统一导航执行接口：ats_navigation_interfaces/NavigateToPose on
+# /ats_navigate_to_pose。
 ament_auto_add_library(send_ats_nav_goal SHARED plugins/action/send_ats_nav_goal.cpp)
 list(APPEND plugin_libs send_ats_nav_goal)
-
-ament_auto_add_library(send_nav_through_poses SHARED plugins/action/send_nav_through_poses.cpp)
-list(APPEND plugin_libs send_nav_through_poses)
 
 ament_auto_add_library(select_path_goal_pose SHARED plugins/action/select_path_goal_pose.cpp)
 list(APPEND plugin_libs select_path_goal_pose)
@@ -224,23 +215,6 @@ if(BUILD_TESTING)
     )
   endif()
 
-  # 对照 profile 的 `SendNavThroughPoses`：目标飞行中必须 RUNNING、halt 必须真的
-  # cancel、server 缺失时按超时判失败且 tick 内不阻塞。使用真实 Nav2 action 服务端。
-  ament_add_gtest(test_send_nav_through_poses_halt test/test_send_nav_through_poses_halt.cpp
-    TIMEOUT 120)
-  if(TARGET test_send_nav_through_poses_halt)
-    target_include_directories(test_send_nav_through_poses_halt PRIVATE include)
-    target_link_libraries(test_send_nav_through_poses_halt send_nav_through_poses)
-    ament_target_dependencies(test_send_nav_through_poses_halt
-      behaviortree_cpp
-      geometry_msgs
-      nav2_msgs
-      nav_msgs
-      rclcpp
-      rclcpp_action
-      tf2_ros
-    )
-  endif()
 endif()
 
 #############
