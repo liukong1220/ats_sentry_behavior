@@ -1,10 +1,8 @@
 ats_sentry_behavior_server:
   ros__parameters:
-    # 本文件是实车 profile 的行为参数来源（`ats_sentry_bringup/bringup.launch.py`
-    # 的 `behavior_params_file` 默认值）。实车用挂钟，因此文件级默认必须是 false；
-    # 仿真回归通过同一 ATS action 参数契约进行受控覆盖。
-    # 若此处为 true 而 launch 覆盖成 false，全链 0.5 s 租约与 stale 判据的
-    # 时间基准会在"覆盖失效"时静默错位，属于停止条件而非降级项。
+    # 非正式示例。正式 profile 只从
+    # `ats_sentry_bringup/params/node_params.yaml` 读取这一节点的参数；本文件只用于
+    # 显式传入 standalone 行为调试，不得作为 launch 默认值。
     use_sim_time: false
     action_name: ats_sentry_behavior
     tick_frequency: 15

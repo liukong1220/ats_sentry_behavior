@@ -190,7 +190,7 @@ protected:
 
     client_node_ = std::make_shared<rclcpp::Node>("ats_nav_test_client");
     // `SendAtsNavGoal` 的构造函数从这些参数读取唯一权威的 action 名字与容差，
-    // 与 `params/sentry_behavior.yaml` 的 `decision_config` 同名。
+    // 与正式根 node_params.yaml 的 `decision_config` 同名。
     client_node_->declare_parameter(
       "decision.decision_config.ats_action_server", std::string(kActionName));
     client_node_->declare_parameter("decision.decision_config.active_goal_hold_tolerance", 0.25);
