@@ -57,7 +57,7 @@ source install/setup.bash
 
 ```bash
 ros2 launch ats_sentry_behavior ats_sentry_behavior_launch.py \
-  params_file:=src/ats_sentry_behavior/params/sentry_behavior.yaml
+  params_file:=src/ats_sentry_bringup/params/node_params.yaml
 ```
 
 正常部署由 `ats_sentry_bringup` 外层入口启动。launch 同时创建：
@@ -98,7 +98,8 @@ ros2 launch ats_sentry_behavior ats_sentry_behavior_launch.py \
 
 | 文件 | 用途 |
 | :--- | :--- |
-| `params/sentry_behavior.yaml` | 正式实机参数，ATS action 名的当前权威来源 |
+| `../ats_sentry_bringup/params/node_params.yaml` | 正式 profile 的 behavior 参数唯一权威来源 |
+| `params/sentry_behavior.example.yaml` | standalone 调试时显式传入的示例，不由任何正式入口默认加载 |
 | `params/sentry_behavior_loopback.yaml` | loopback/Nav2 对照 |
 | `params/sentry_behavior_decision_vision_test.yaml` | 视觉接管专项测试 |
 | `params/rmuc_waypoints.csv` | 场地目标点 |

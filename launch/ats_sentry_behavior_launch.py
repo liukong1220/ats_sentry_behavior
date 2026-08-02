@@ -1,6 +1,3 @@
-import os
-
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
@@ -8,9 +5,6 @@ from launch_ros.actions import Node, PushRosNamespace, SetRemap
 
 
 def generate_launch_description():
-    # Get the package directory
-    bringup_dir = get_package_share_directory("ats_sentry_behavior")
-
     # Create the launch configuration variables
     namespace = LaunchConfiguration("namespace")
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -38,8 +32,10 @@ def generate_launch_description():
 
     declare_params_file_cmd = DeclareLaunchArgument(
         "params_file",
-        default_value=os.path.join(bringup_dir, "params", "sentry_behavior.yaml"),
-        description="Full path to the ROS2 parameters file to use for all launched nodes",
+        description=(
+            "Required full path to the behavior parameters. The formal profile passes "
+            "ats_sentry_bringup/params/node_params.yaml; examples and tests must opt in explicitly."
+        ),
     )
 
     declare_log_level_cmd = DeclareLaunchArgument(

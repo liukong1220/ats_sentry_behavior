@@ -28,7 +28,7 @@ SendAtsNavGoalAction::SendAtsNavGoalAction(
 
   // `RegisterPlugins` 不提供 default_port_value，因此没有 action_name 端口时
   // 客户端会是空的，基类 tick 会直接抛 RuntimeError。这里用参数补上唯一权威的
-  // action 名字：数值只在 `params/sentry_behavior.yaml` 一处给出。
+  // 正式 action 名字由根 node_params.yaml 的 decision_config 给出。
   if (action_server.empty()) {
     RCLCPP_ERROR(
       logger(),
