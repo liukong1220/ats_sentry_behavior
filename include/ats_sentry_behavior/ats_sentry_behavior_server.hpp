@@ -91,8 +91,8 @@ private:
   std::vector<std::string> pose_base_frame_candidates_{"base_footprint", "base_link"};
   double pose_timeout_s_ = 0.5;
   bool pose_tf_fallback_enabled_ = true;
-  // P6 二：行为层输入的权威源与 QoS 显式化，默认值对齐 Nav2-free profile 的
-  // 唯一发布者（`ats_rog_map_adapter` 与 `localization_fusion`）。
+  // 行为层输入的权威源与 QoS 显式化，默认值对齐唯一发布者
+  // （`ats_rog_map_adapter` 与 `localization_fusion`）。
   std::string planning_grid_topic_ = "/rc_esdf/planning_grid";
   int planning_grid_qos_depth_ = 1;
   bool planning_grid_qos_reliable_ = true;

@@ -115,7 +115,7 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   node()->declare_parameter("export_tree_models_on_shutdown", false);
   node()->declare_parameter(
     "tree_models_output_path",
-    (std::filesystem::path(ROOT_DIR) / "behavior_trees" / "models.xml").string());
+    (std::filesystem::path(ROOT_DIR) / "behavior_trees" / "generated_models.xml").string());
   declareDecisionParameters();
   node()->get_parameter("use_cout_logger", use_cout_logger_);
   node()->get_parameter("export_tree_models_on_shutdown", export_tree_models_on_shutdown_);
@@ -159,11 +159,10 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   // 视觉融合状态直接进入根黑板，供行为树条件节点统一消费。
   subscribe<sp_msgs::msg::VisionTargetMsg>(decision_vision_topic_, "sp_vision_target");
 
-  // P6 二：行为层的栅格输入改成自研链的权威源 `/rc_esdf/planning_grid`
-  // （Nav2-free profile 里由 `ats_rog_map_adapter` 独家发布，QoS
+  // 行为层的栅格输入是自研链的权威源 `/rc_esdf/planning_grid`
+  // （由 `ats_rog_map_adapter` 独家发布，QoS
   // `KeepLast(1) reliable transient_local`，与发布端 `output_qos` 完全一致）。
-  // 原来的 `global_costmap/costmap` 只在 Nav2 对照 profile 存在；本轮把
-  // 话题名和 QoS 都提为显式参数，避免"改了 profile 但行为层还盯着 Nav2 话题"。
+  // 话题名和 QoS 都提为显式参数，避免配置改变后输入源漂移。
   // 语义提醒：`planning_grid` 的 `-1` 表示未知（`unknown_is_obstacle` 时保持
   // `-1`），`100` 表示占据；`select_vision_follow_path` 的 `isTraversable()`
   // 判据是 `cell >= 0 && cell < occupied_threshold`，与该编码一致。
@@ -278,11 +277,10 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.referee.start_gate.max_remain_time", 420);
 
   declare_parameter("decision.topics.spin", std::string("cmd_spin"));
-  // P6 二：`decision.topics.cmd_vel` 已删除。行为层不得再持有直发底盘的 Twist 通路，
+  // `decision.topics.cmd_vel` 已删除。行为层不得再持有直发底盘的 Twist 通路，
   // 唯一执行授权是 `/planner/execution_command`；停车靠 halt/cancel 触发
   // `ExecutionCommand STOP -> emergency_stop=true -> /cmd_vel_mpc=0 ->
-  // /motion_control=0 -> 串口零速度`。旧 `PublishTwist` 只留在 Nav2 对照 profile，
-  // 且那些树把 `topic_name` 硬编码为 `cmd_vel`，不依赖本参数。
+  // /motion_control=0 -> 串口零速度`。
   declare_parameter("decision.topics.gimbal_cmd", std::string("cmd_gimbal"));
   declare_parameter("decision.topics.robot_mode", std::string("decision/robot_mode"));
   declare_parameter("decision.motion.default_spin_speed", 0.0);
@@ -346,7 +344,7 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.pose.tf_fallback_enabled", true);
 
   // P6 二：行为层输入的权威源、QoS 与新鲜度阈值全部显式化。
-  // 1. `planning_grid`：Nav2-free profile 由 `ats_rog_map_adapter` 独家发布，
+  // 1. `planning_grid`：由 `ats_rog_map_adapter` 独家发布，
   //    发布端 QoS 是 `KeepLast(1) reliable transient_local`，订阅端必须一致，
   //    否则 transient_local 的历史样本拿不到，地图未就绪会被误判成"已就绪"。
   // 2. `localization`：`localization_fusion` 是唯一发布者，用 `SensorDataQoS`
@@ -384,21 +382,16 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.hp_thresholds.critical.low", 150);
 
   declare_parameter("decision.decision_config.path_tolerance", 0.2);
-  declare_parameter(
-    "decision.decision_config.nav2_action_server", std::string("/navigate_through_poses"));
-  declare_parameter(
-    "decision.decision_config.nav2_to_pose_action_server", std::string("/navigate_to_pose"));
   declare_parameter("decision.decision_config.decision_period_ms", 100);
   declare_parameter("decision.decision_config.goal_position_tolerance", 0.1);
   // 行为层“是否已到达路径终点”的判定容差。
-  // 这个值应尽量与 Nav2 的 general_goal_checker.xy_goal_tolerance 对齐，
-  // 否则会出现 Nav2 已经报 Goal succeeded，但行为层仍继续重发同一路径。
+  // 这个值用于抑制目标邻域内的重复重发；是否成功只认 action result。
   declare_parameter("decision.decision_config.path_goal_reached_tolerance", 0.1);
   // 导航目标重发节流参数：
-  // 1. active_goal_hold_tolerance：若新路径与当前已发给 Nav2 的路径仅有小范围偏差，
+  // 1. active_goal_hold_tolerance：若新路径与当前 action 的路径仅有小范围偏差，
   //    则先认为它们属于“同一个意图”，不要立刻 cancel + 重发。
   // 2. active_goal_min_resend_interval_s：即使目标有轻微变化，也要求与上一次发目标
-  //    至少间隔这么久才允许再次 preempt，减少视觉抖动放大成 MPPI 左右试探。
+  //    至少间隔这么久才允许再次 preempt，减少视觉抖动放大成横向试探。
   declare_parameter("decision.decision_config.active_goal_hold_tolerance", 0.45);
   declare_parameter("decision.decision_config.active_goal_min_resend_interval_s", 0.8);
   // 视觉实时追随专用节流参数：
@@ -411,7 +404,6 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.decision_config.action_server_wait_timeout_s", 0.5);
   // 官方 profile 的统一导航执行接口：
   // `ats_navigation_interfaces/action/NavigateToPose` on `/ats_navigate_to_pose`。
-  // 上面的 nav2_* 两项只服务于明确标注的 Nav2 对照 profile。
   declare_parameter(
     "decision.decision_config.ats_action_server", std::string("/ats_navigate_to_pose"));
   // 单个航点的执行超时上界。<=0 时按 action 定义交由目标管理器的服务端默认值决定，

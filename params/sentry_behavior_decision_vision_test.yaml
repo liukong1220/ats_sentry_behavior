@@ -103,8 +103,7 @@ ats_sentry_behavior_server:
       # 一个发布者，且 `rc_esdf_map` 的输出 QoS 与 adapter 完全一致
       # （`rclcpp::QoS(1).reliable().transient_local()`），所以话题名和 QoS
       # 与实车 profile 相同，只有新鲜度余量按本 profile 的发布节奏另算。
-      # 注意该 profile 的 `launch_nav2` 仍是默认 `True`，`global_costmap/costmap`
-      # 同时存在，但行为层不再订阅它：视觉跟随的可通行判据只认权威规划栅格。
+      # 视觉跟随的可通行判据只认权威规划栅格，不接受其他地图副本。
       inputs:
         planning_grid:
           topic: /rc_esdf/planning_grid
@@ -153,8 +152,6 @@ ats_sentry_behavior_server:
 
       decision_config:
         path_tolerance: 0.2
-        nav2_action_server: "/navigate_through_poses"
-        nav2_to_pose_action_server: "/navigate_to_pose"
         decision_period_ms: 100
         goal_position_tolerance: 0.2
         path_goal_reached_tolerance: 0.2

@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- P6 二：视觉测试树同样只走
      `ats_navigation_interfaces/action/NavigateToPose` on `/ats_navigate_to_pose`。
-     终端成功只认 `RESULT_SUCCEEDED`；旧 Nav2 节点只保留在
-     `dev_rm.xml`、`rmul_2025.xml` 对照 profile。 -->
+     终端成功只认 `RESULT_SUCCEEDED`。 -->
 <root BTCPP_format="4">
   <BehaviorTree ID="vision_override_no_referee">
     <Sequence>
