@@ -1,13 +1,23 @@
-# Every repository listed here will get cloned and built during CI runs.
-# Use this for repositories that cannot be installed via rosdep.
-
+# Standalone source dependency manifest for ats_sentry_behavior.
+#
+# Import from an ATS workspace root after cloning this repository to
+# src/ats_sentry_behavior:
+#   vcs import --skip-existing src < src/ats_sentry_behavior/dependencies.repos
+#
+# ROS distribution packages remain rosdep-owned. These repositories provide
+# BehaviorTree.ROS2 plus ATS interfaces that are not available from rosdep.
 repositories:
-  BehaviorTree.ROS2:
+  dependencies/BehaviorTree.ROS2:
     type: git
-    url: https://github.com/SMBU-PolarBear-Robotics-Team/BehaviorTree.ROS2.git
+    url: https://github.com/liukong1220/BehaviorTree.ROS2.git
     version: humble
 
-  ats_rm_interfaces:
+  interfaces:
     type: git
-    url: https://github.com/SMBU-PolarBear-Robotics-Team/ats_rm_interfaces.git
-    version: protocol-v1.7.0
+    url: https://github.com/liukong1220/interfaces.git
+    version: develop
+
+  ats_sentry_nav:
+    type: git
+    url: https://github.com/liukong1220/ats_sentry_nav.git
+    version: develop
