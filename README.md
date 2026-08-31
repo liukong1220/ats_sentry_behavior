@@ -119,7 +119,7 @@ MAKEFLAGS=-j6 colcon build --base-paths src --symlink-install \
 source install/setup.bash
 ```
 
-必须保留 `--base-paths src`，避免参考目录或同名包进入构建图。
+建议保留 `--base-paths src`，避免参考目录或同名包进入构建图。
 
 ### 检查 Launch 参数
 
@@ -127,7 +127,7 @@ source install/setup.bash
 ros2 launch ats_sentry_behavior ats_sentry_behavior_launch.py --show-args
 ```
 
-`params_file` 没有包内默认值，standalone 启动必须显式传入。
+`params_file` 没有包内默认值，standalone 启动建议显式传入。
 
 ## 启动与部署
 
@@ -151,7 +151,7 @@ ros2 launch ats_sentry_behavior ats_sentry_behavior_launch.py \
   params_file:=/home/ats/ATS_2026_snetry_test/src/ats_sentry_bringup/params/node_params.yaml
 ```
 
-使用包内示例参数时必须明确选择：
+使用包内示例参数时建议明确选择：
 
 ```bash
 ros2 launch ats_sentry_behavior ats_sentry_behavior_launch.py \
@@ -303,7 +303,7 @@ server/client effective parameter dump 的键、值和类型一致；MuJoCo rect
 - 完整实机根入口在当前工作站曾受缺失 xmacro 资产阻断，standalone effective dump
   不能替代完整实机启动复验；
 - HIL、实车 cancel/preempt、比赛全状态长时运行尚未验收；
-- 包级 lint 存在既有 copyright/cpplint/clang-format 债务时，应单列，不得把定向测试通过写成
+- 包级 lint 存在既有 copyright/cpplint/clang-format 债务时，应单列，建议避免把定向测试通过写成
   全包测试通过。
 
 ## 目录结构
