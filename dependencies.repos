@@ -9,15 +9,15 @@
 repositories:
   dependencies/BehaviorTree.ROS2:
     type: git
-    url: https://github.com/liukong1220/BehaviorTree.ROS2.git
+    url: git@github.com:liukong1220/BehaviorTree.ROS2.git
     version: humble
 
   interfaces:
     type: git
-    url: https://github.com/liukong1220/interfaces.git
+    url: git@github.com:liukong1220/interfaces.git
     version: develop
 
   ats_sentry_nav:
     type: git
-    url: https://github.com/liukong1220/ats_sentry_nav.git
+    url: git@github.com:liukong1220/ats_sentry_nav.git
     version: develop
