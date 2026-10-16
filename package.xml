@@ -22,6 +22,7 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>behaviortree_cpp</depend>
   <depend>behaviortree_ros2</depend>
   <depend>ats_rm_interfaces</depend>
   <!-- ATS 导航 action / 执行授权消息：官方 profile 的统一导航接口来源。 -->
