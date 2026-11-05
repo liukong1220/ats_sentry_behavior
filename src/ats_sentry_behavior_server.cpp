@@ -7,6 +7,8 @@
 
 #include "behaviortree_cpp/xml_parsing.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "ats_navigation_interfaces/msg/planning_map_snapshot.hpp"
+#include "ats_sentry_behavior/planning_snapshot_grid.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "ats_rm_interfaces/msg/buff.hpp"
@@ -131,12 +133,12 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   node()->get_parameter("decision.pose.expected_frame", pose_expected_frame_);
   node()->get_parameter("decision.pose.timeout_s", pose_timeout_s_);
   node()->get_parameter("decision.pose.tf_fallback_enabled", pose_tf_fallback_enabled_);
-  node()->get_parameter("decision.inputs.planning_grid.topic", planning_grid_topic_);
-  node()->get_parameter("decision.inputs.planning_grid.qos_depth", planning_grid_qos_depth_);
-  node()->get_parameter("decision.inputs.planning_grid.qos_reliable", planning_grid_qos_reliable_);
+  node()->get_parameter("decision.inputs.planning_snapshot.topic", planning_grid_topic_);
+  node()->get_parameter("decision.inputs.planning_snapshot.qos_depth", planning_grid_qos_depth_);
+  node()->get_parameter("decision.inputs.planning_snapshot.qos_reliable", planning_grid_qos_reliable_);
   node()->get_parameter(
-    "decision.inputs.planning_grid.qos_transient_local", planning_grid_qos_transient_local_);
-  node()->get_parameter("decision.inputs.planning_grid.timeout_s", planning_grid_timeout_s_);
+    "decision.inputs.planning_snapshot.qos_transient_local", planning_grid_qos_transient_local_);
+  node()->get_parameter("decision.inputs.planning_snapshot.timeout_s", planning_grid_timeout_s_);
   node()->get_parameter("decision.inputs.localization.topic", localization_topic_);
   node()->get_parameter("decision.inputs.localization.qos_depth", localization_qos_depth_);
   node()->get_parameter("decision.inputs.localization.qos_reliable", localization_qos_reliable_);
@@ -159,13 +161,14 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   // 视觉融合状态直接进入根黑板，供行为树条件节点统一消费。
   subscribe<sp_msgs::msg::VisionTargetMsg>(decision_vision_topic_, "sp_vision_target");
 
-  // 行为层的栅格输入是自研链的权威源 `/rc_esdf/planning_grid`
+  // 行为层的栅格输入是规划链的唯一数值契约 `/rog_map_adapter/planning_snapshot`
   // （由 `ats_rog_map_adapter` 独家发布，QoS
   // `KeepLast(1) reliable transient_local`，与发布端 `output_qos` 完全一致）。
   // 话题名和 QoS 都提为显式参数，避免配置改变后输入源漂移。
-  // 语义提醒：`planning_grid` 的 `-1` 表示未知（`unknown_is_obstacle` 时保持
-  // `-1`），`100` 表示占据；`select_vision_follow_path` 的 `isTraversable()`
-  // 判据是 `cell >= 0 && cell < occupied_threshold`，与该编码一致。
+  // 黑板 `nav_globalCostmap` 仍是 OccupancyGrid：占据取快照 occupancy，`-1` 表示
+  // 未知，`100` 表示占据；快照 ready=false 时整张置 `-1`（见 planning_snapshot_grid.hpp）。
+  // `select_vision_follow_path` 的 `isTraversable()` 判据是
+  // `cell >= 0 && cell < occupied_threshold`，与该编码一致。
   auto planning_grid_qos =
     rclcpp::QoS(rclcpp::KeepLast(std::max<int>(1, planning_grid_qos_depth_)));
   if (planning_grid_qos_reliable_) {
@@ -176,8 +179,12 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   if (planning_grid_qos_transient_local_) {
     planning_grid_qos.transient_local();
   }
-  subscribe<nav_msgs::msg::OccupancyGrid>(
-    planning_grid_topic_, "nav_globalCostmap", planning_grid_qos);
+  subscriptions_.push_back(
+    node()->create_subscription<ats_navigation_interfaces::msg::PlanningMapSnapshot>(
+      planning_grid_topic_, planning_grid_qos,
+      [this](const ats_navigation_interfaces::msg::PlanningMapSnapshot::SharedPtr msg) {
+        globalBlackboard()->set("nav_globalCostmap", planningSnapshotToGrid(*msg));
+      }));
 
   // P6 二：当前位姿改成权威源 `/localization`（`localization_fusion` 是唯一
   // 发布者，`SensorDataQoS`）。原来同时订阅 `odom` 与 `odometry` 会让"谁最后
@@ -218,7 +225,7 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
     localization_topic_, localization_qos, localization_callback));
   RCLCPP_INFO(
     node()->get_logger(),
-    "决策输入权威源：planning_grid='%s'(depth=%d reliable=%d transient_local=%d) "
+    "决策输入权威源：planning_snapshot='%s'(depth=%d reliable=%d transient_local=%d) "
     "localization='%s'(depth=%d reliable=%d) freshness: pose_timeout=%.3f s "
     "grid_timeout=%.3f s",
     planning_grid_topic_.c_str(), planning_grid_qos_depth_,
@@ -344,18 +351,18 @@ void SentryBehaviorServer::declareDecisionParameters()
   declare_parameter("decision.pose.tf_fallback_enabled", true);
 
   // P6 二：行为层输入的权威源、QoS 与新鲜度阈值全部显式化。
-  // 1. `planning_grid`：由 `ats_rog_map_adapter` 独家发布，
+  // 1. `planning_snapshot`：由 `ats_rog_map_adapter` 独家发布，
   //    发布端 QoS 是 `KeepLast(1) reliable transient_local`，订阅端必须一致，
   //    否则 transient_local 的历史样本拿不到，地图未就绪会被误判成"已就绪"。
   // 2. `localization`：`localization_fusion` 是唯一发布者，用 `SensorDataQoS`
   //    （`KeepLast(5) best_effort volatile`），所以这里默认 best_effort。
-  // 3. freshness：`planning_grid` 是 latched，`transient_local` 的旧样本必须靠
+  // 3. freshness：`planning_snapshot` 是 latched，`transient_local` 的旧样本必须靠
   //    时间戳判 stale，不能靠"有没有收到"判就绪。
-  declare_parameter("decision.inputs.planning_grid.topic", std::string("/rc_esdf/planning_grid"));
-  declare_parameter("decision.inputs.planning_grid.qos_depth", 1);
-  declare_parameter("decision.inputs.planning_grid.qos_reliable", true);
-  declare_parameter("decision.inputs.planning_grid.qos_transient_local", true);
-  declare_parameter("decision.inputs.planning_grid.timeout_s", 2.0);
+  declare_parameter("decision.inputs.planning_snapshot.topic", std::string("/rog_map_adapter/planning_snapshot"));
+  declare_parameter("decision.inputs.planning_snapshot.qos_depth", 1);
+  declare_parameter("decision.inputs.planning_snapshot.qos_reliable", true);
+  declare_parameter("decision.inputs.planning_snapshot.qos_transient_local", true);
+  declare_parameter("decision.inputs.planning_snapshot.timeout_s", 2.0);
   declare_parameter("decision.inputs.localization.topic", std::string("/localization"));
   declare_parameter("decision.inputs.localization.qos_depth", 5);
   declare_parameter("decision.inputs.localization.qos_reliable", false);

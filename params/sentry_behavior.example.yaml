@@ -152,10 +152,10 @@ ats_sentry_behavior_server:
       # P6 二：行为层输入的权威源、QoS 与新鲜度阈值。本文件是实车 profile 的
       # 唯一权威来源，不得在 launch 或 node_params.yaml 另给一份不同数值。
       inputs:
-        planning_grid:
-          # 唯一发布者是 `ats_rog_map_adapter`。
-          # 编码：-1 未知，0 已知可通行，100 占据。
-          topic: /rc_esdf/planning_grid
+        planning_snapshot:
+          # 唯一发布者是 `ats_rog_map_adapter`。行为层只用其 occupancy：
+          # -1 未知，0 已知可通行，100 占据；ready=false 时整张视为未知。
+          topic: /rog_map_adapter/planning_snapshot
           # 必须与发布端 `rclcpp::QoS(1).reliable().transient_local()` 一致，
           # 否则拿不到 latched 历史样本，会把"地图未就绪"看成"从未发布"。
           qos_depth: 1

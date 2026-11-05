@@ -68,7 +68,7 @@ private:
   void declareDecisionParameters();
   void initializeDecisionBlackboard();
   void logDecisionSnapshot();
-  /// 判 `planning_grid` 的 latched 旧样本：只告警，不在行为层伪造停车。
+  /// 判规划快照（黑板 `nav_globalCostmap`）的 latched 旧样本：只告警，不在行为层伪造停车。
   void checkPlanningGridFreshness();
 
   std::vector<std::shared_ptr<rclcpp::SubscriptionBase>> subscriptions_;
@@ -93,7 +93,7 @@ private:
   bool pose_tf_fallback_enabled_ = true;
   // 行为层输入的权威源与 QoS 显式化，默认值对齐唯一发布者
   // （`ats_rog_map_adapter` 与 `localization_fusion`）。
-  std::string planning_grid_topic_ = "/rc_esdf/planning_grid";
+  std::string planning_grid_topic_ = "/rog_map_adapter/planning_snapshot";
   int planning_grid_qos_depth_ = 1;
   bool planning_grid_qos_reliable_ = true;
   bool planning_grid_qos_transient_local_ = true;

@@ -53,7 +53,7 @@ MPC 或底盘最终速度授权。导航安全与运动执行仍由 Goal Manager
 ### 视觉接管与可通行性筛选
 
 视觉接管不是直接把目标位置发送给底盘。`SelectVisionFollowPath` 在目标周围生成候选点，
-结合 `/rc_esdf/planning_grid` 的 occupied 阈值、clearance、可达性、路径长度、目标侧保持和
+结合规划快照 `/rog_map_adapter/planning_snapshot` 的 occupied 阈值、clearance、可达性、路径长度、目标侧保持和
 角度步长选择跟随目标，并用滞回与最小重规划间隔抑制跳变。
 
 ### 决策与执行解耦
@@ -190,12 +190,12 @@ ats_sentry_behavior_client:
 | 输入 | 默认正式接口 | 用途 |
 | :--- | :--- | :--- |
 | 当前位姿 | `/localization`，`nav_msgs/msg/Odometry` | 固定点、撤退点、到达判定与视觉跟随 |
-| 规划地图 | `/rc_esdf/planning_grid`，`nav_msgs/msg/OccupancyGrid` | 视觉候选碰撞和可达性检查 |
+| 规划地图 | `/rog_map_adapter/planning_snapshot`，`ats_navigation_interfaces/msg/PlanningMapSnapshot`（黑板里转成 OccupancyGrid，ready=false 时整张未知） | 视觉候选碰撞和可达性检查 |
 | 视觉目标 | `vision/target`，`sp_msgs/msg/VisionTargetMsg` | 目标有效性、位置与跟随策略 |
 | 裁判/资源状态 | `ats_rm_interfaces` 相关消息 | 比赛阶段、血量、弹量、RFID、受击和补给 |
 | 仿真模式 | `decision/sim_mode` | 无裁判系统测试时选择决策模式 |
 
-正式参数中 planning grid 使用 RELIABLE + TRANSIENT_LOCAL，定位输入使用 BEST_EFFORT
+正式参数中规划快照使用 RELIABLE + TRANSIENT_LOCAL，定位输入使用 BEST_EFFORT
 latest-data 语义；两个输入都有 timeout，过期数据不能继续产生新的安全导航意图。
 
 ### 主要输出
@@ -216,7 +216,7 @@ flowchart LR
     Referee["比赛/资源状态"] --> Blackboard["Behavior blackboard"]
     Vision["视觉目标"] --> Blackboard
     Pose["/localization"] --> Blackboard
-    Grid["/rc_esdf/planning_grid"] --> Blackboard
+    Grid["/rog_map_adapter/planning_snapshot"] --> Blackboard
     Blackboard --> Tree["BehaviorTree.CPP"]
     Tree --> Select["目标/模式选择与滞回"]
     Select --> AtsGoal["SendAtsNavGoal"]

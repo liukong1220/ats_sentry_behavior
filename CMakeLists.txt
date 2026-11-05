@@ -190,6 +190,13 @@ if(BUILD_TESTING)
     )
   endif()
 
+  # 规划快照 -> 黑板 OccupancyGrid：ready=false 不得留下旧的可通行格。
+  ament_add_gtest(test_planning_snapshot_grid test/test_planning_snapshot_grid.cpp)
+  if(TARGET test_planning_snapshot_grid)
+    target_include_directories(test_planning_snapshot_grid PRIVATE include)
+    ament_target_dependencies(test_planning_snapshot_grid ats_navigation_interfaces nav_msgs)
+  endif()
+
   # 官方 RMUC 主树的优先级与 halt 传播：直接加载仓库里的真实 XML，
   # 只把叶子换成桩节点，因此测的是官方树本身而不是另写的等价树。
   ament_add_gtest(test_official_tree_priority test/test_official_tree_priority.cpp)
