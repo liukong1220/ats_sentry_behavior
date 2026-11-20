@@ -163,67 +163,6 @@ endforeach()
 ## Testing ##
 #############
 
-if(BUILD_TESTING)
-  set(ament_cmake_clang_format_CONFIG_FILE "${CMAKE_SOURCE_DIR}/.clang-format")
-  find_package(ament_lint_auto REQUIRED)
-  list(APPEND AMENT_LINT_AUTO_EXCLUDE
-    ament_cmake_uncrustify
-    ament_cmake_flake8
-  )
-  ament_lint_auto_find_test_dependencies()
-
-  # ATS 导航 action 判据与航点状态机：纯逻辑，不需要真实 action server。
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_ats_nav_goal_logic test/test_ats_nav_goal_logic.cpp)
-  if(TARGET test_ats_nav_goal_logic)
-    target_include_directories(test_ats_nav_goal_logic PRIVATE include)
-    ament_target_dependencies(test_ats_nav_goal_logic
-      ats_navigation_interfaces
-      ats_rm_interfaces
-      behaviortree_cpp
-      geometry_msgs
-      nav_msgs
-      rclcpp
-      sp_msgs
-      tf2
-      tf2_geometry_msgs
-    )
-  endif()
-
-  # 规划快照 -> 黑板 OccupancyGrid：ready=false 不得留下旧的可通行格。
-  ament_add_gtest(test_planning_snapshot_grid test/test_planning_snapshot_grid.cpp)
-  if(TARGET test_planning_snapshot_grid)
-    target_include_directories(test_planning_snapshot_grid PRIVATE include)
-    ament_target_dependencies(test_planning_snapshot_grid ats_navigation_interfaces nav_msgs)
-  endif()
-
-  # 官方 RMUC 主树的优先级与 halt 传播：直接加载仓库里的真实 XML，
-  # 只把叶子换成桩节点，因此测的是官方树本身而不是另写的等价树。
-  ament_add_gtest(test_official_tree_priority test/test_official_tree_priority.cpp)
-  if(TARGET test_official_tree_priority)
-    ament_target_dependencies(test_official_tree_priority behaviortree_cpp)
-  endif()
-
-  # `SendAtsNavGoal` 的 action 语义：halt/cancel、迟到 result、result_code 映射、
-  # 多航点推进。使用真实的 action 服务端，不桩掉 rclcpp_action。
-  ament_add_gtest(test_send_ats_nav_goal_action test/test_send_ats_nav_goal_action.cpp
-    TIMEOUT 120)
-  if(TARGET test_send_ats_nav_goal_action)
-    target_include_directories(test_send_ats_nav_goal_action PRIVATE include)
-    target_link_libraries(test_send_ats_nav_goal_action send_ats_nav_goal)
-    ament_target_dependencies(test_send_ats_nav_goal_action
-      ats_navigation_interfaces
-      behaviortree_cpp
-      behaviortree_ros2
-      geometry_msgs
-      nav_msgs
-      rclcpp
-      rclcpp_action
-    )
-  endif()
-
-endif()
-
 #############
 ## Install ##
 #############

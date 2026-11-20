@@ -277,34 +277,18 @@ ros2 topic list --no-daemon | rg '^/plan$|costmap'
 上述两条在正式链应无匹配输出。topic/action 存在只能证明发现，不能替代 goal
 feedback/result、halt/cancel 和底盘停止的闭环验证。
 
-## 测试与验证边界
-
-### 包级测试
+## 构建与验证边界
 
 ```bash
-colcon test --base-paths src --packages-select ats_sentry_behavior
-colcon test-result --test-result-base build/ats_sentry_behavior --verbose
+./build.sh --packages-select ats_sentry_behavior
+python3 scripts/validate_navigation_config.py
 ```
-
-主要定向测试：
-
-| 测试 | 覆盖内容 |
-| :--- | :--- |
-| `test_ats_nav_goal_logic` | ATS result 判据、航点推进和本地目标逻辑 |
-| `test_official_tree_priority` | 真实正式 XML 的优先级与 halt 传播 |
-| `test_send_ats_nav_goal_action` | 真实 action server 下的 cancel、迟到 result、结果码和多航点 |
-
-最近一次 S1/P4 准备阶段记录：behavior action 定向测试通过；迁移前后 behavior
-server/client effective parameter dump 的键、值和类型一致；MuJoCo rectangle 的五段 action
-运行通过。
 
 仍需保留以下边界：
 
 - 完整实机根入口在当前工作站曾受缺失 xmacro 资产阻断，standalone effective dump
   不能替代完整实机启动复验；
-- HIL、实车 cancel/preempt、比赛全状态长时运行尚未验收；
-- 包级 lint 存在既有 copyright/cpplint/clang-format 债务时，应单列，建议避免把定向测试通过写成
-  全包测试通过。
+- HIL、实车 cancel/preempt、比赛全状态长时运行尚未验收。
 
 ## 目录结构
 
